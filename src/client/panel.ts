@@ -15,7 +15,18 @@ import { createElement, useCallback, useEffect, useMemo, useRef, useState, type 
 import { call, FilePanelError, type ContextValue, type EntryInfo, type Preview } from './api.js'
 import { insertReference } from './reference.js'
 import { languageForPath } from './tab.js'
-import { findDeclarationLine, importedFrom, lineElements, lineIndexOf, quotedSpecifierOn, revealLine, specifierLike, trackJumpAffordance, wordAtPoint } from './jump.js'
+import {
+  findDeclarationLine,
+  importedFrom,
+  lineElements,
+  lineIndexOf,
+  memberReceiver,
+  quotedSpecifierOn,
+  revealLine,
+  specifierLike,
+  trackJumpAffordance,
+  wordAtPoint,
+} from './jump.js'
 
 /** Props the tab body receives from this plugin's `inject` factory. */
 export interface FilePanelProps {
@@ -467,7 +478,47 @@ export function FilePanel(props: FilePanelProps): ReactNode {
           .catch(report)
         return
       }
-      setNotice({ kind: 'error', text: `没有找到「${token}」的定义（跨文件的符号解析需要语言服务，本面板只跟随相对 import）` })
+      // Member access: `service.doThing()` where `service` is imported — follow
+      // the RECEIVER's import and look the member up in that file.
+      const receiver = memberReceiver(lineText, token)
+      if (receiver !== undefined && receiver !== 'this') {
+        const receiverSpecifier = importedFrom(lines, receiver)
+        if (receiverSpecifier !== undefined) {
+          void call<{ path: string | null; reason?: string }>('resolve', sessionId, { path: previewPath, specifier: receiverSpecifier })
+            .then(async result => {
+              if (result.path === null) {
+                setNotice({ kind: 'error', text: `${receiver} 来自「${receiverSpecifier}」，但无法解析该模块` })
+                return
+              }
+              const target = result.path
+              const targetLines = await call<Preview>('read', sessionId, { path: target })
+                .then(value => (value.content ?? '').split('\n'))
+                .catch(() => [] as string[])
+              const targetLine = findDeclarationLine(targetLines, token)
+              const opened = openResource(target, targetLine ?? 1)
+              setNotice(
+                opened.ok
+                  ? {
+                      kind: 'info',
+                      text:
+                        targetLine === undefined
+                          ? `跳转到 ${target}（${receiver}.${token} 的成员，未在目标内定位到定义）`
+                          : `跳转到 ${target} 第 ${targetLine} 行（${receiver}.${token} 的定义）`,
+                    }
+                  : { kind: 'error', text: opened.reason ?? '打开失败' },
+              )
+            })
+            .catch(report)
+          return
+        }
+      }
+      setNotice({
+        kind: 'error',
+        text:
+          receiver === undefined
+            ? `没有找到「${token}」的定义（跨文件的符号解析需要语言服务，本面板只跟随相对 import）`
+            : `没有找到「${token}」的定义：${receiver} 不是本文件导入的，成员定义需要语言服务`,
+      })
     },
     [openFile, openResource, preview, report, sessionId],
   )

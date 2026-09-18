@@ -247,3 +247,28 @@ export function trackJumpAffordance(container: HTMLElement): () => void {
     window.removeEventListener('keyup', onKeyUp)
   }
 }
+
+/**
+ * The receiver of a member access, for `obj.method()` / `this.method()` style
+ * calls: what stands before the final dot.
+ *
+ * This is what lets a click on `doThing` in `service.doThing(1)` follow the
+ * `service` import when `doThing` itself is not imported by name.
+ *
+ * @param lineText - the rendered line's text.
+ * @param token - the clicked identifier.
+ * @returns the receiver identifier, or undefined when this is not a member access.
+ */
+export function memberReceiver(lineText: string, token: string): string | undefined {
+  const at = lineText.indexOf(token)
+  if (at <= 0) return undefined
+  let index = at - 1
+  while (index >= 0 && /\s/.test(lineText[index] ?? '')) index -= 1
+  if (lineText[index] !== '.') return undefined
+  index -= 1
+  if (lineText[index] === '?') index -= 1
+  const end = index + 1
+  while (index >= 0 && /[\w$]/.test(lineText[index] ?? '')) index -= 1
+  const receiver = lineText.slice(index + 1, end)
+  return receiver === '' ? undefined : receiver
+}
