@@ -109,6 +109,38 @@ check('a QUOTED package name is passed through for the host to explain',
 check('a split string literal is recovered from the line',
   jump.quotedSpecifierOn("import { helper } from './b.js'") === './b.js')
 
+// ── variables ───────────────────────────────────────────────────────────────
+check('a variable declared below its use is found',
+  jump.findDeclarationLine(['const total = helper(1)', 'const local = 2'], 'local') === 2)
+check('a destructured binding is found',
+  jump.findDeclarationLine(['const { alpha, beta } = source()'], 'beta') === 1)
+check('an array destructuring binding is found',
+  jump.findDeclarationLine(['const [first, second] = pair'], 'second') === 1)
+check('an inline object key is found',
+  jump.findDeclarationLine(['const config = { retries: 3, timeout: 5 }'], 'timeout') === 1)
+check('an exported const is found',
+  jump.findDeclarationLine(['export const API_BASE = "/x"'], 'API_BASE') === 1)
+
+// ── methods ─────────────────────────────────────────────────────────────────
+check('a class method is found',
+  jump.findDeclarationLine(['class Local {', '  compute(): number {', '    return 41', '  }', '}'], 'compute') === 2)
+check('a Vue options method is found',
+  jump.findDeclarationLine(['export default {', '  methods: {', '    doIt() {', '      return 1', '    },', '  },', '}'], 'doIt') === 3)
+check('a class field arrow function is found',
+  jump.findDeclarationLine(['class Panel {', '  handleClick = () => {}', '}'], 'handleClick') === 2)
+check('a getter is found',
+  jump.findDeclarationLine(['const vm = {', '  get size() {', '    return 1', '  },', '}'], 'size') === 2)
+
+// ── Vue / LESS shapes ───────────────────────────────────────────────────────
+check('a LESS variable is found',
+  jump.findDeclarationLine(['@gap: 8px;', '.drop { margin: @gap; }'], '@gap') === 1)
+check('an SCSS variable is found',
+  jump.findDeclarationLine(['$brand: #4d6bfe;'], '$brand') === 1)
+check('a template class reaches its style rule',
+  jump.findDeclarationLine(['<template>', '  <div class="wrapper box">', '</template>', '<style>', '.wrapper {', '  display: flex;', '}', '</style>'], 'wrapper') === 5)
+check('the sigil is not required for a style rule',
+  jump.findDeclarationLine(['<style>', '.wrapper {', '}'], 'wrapper') === 2)
+
 rmSync(outDir, { recursive: true, force: true })
 process.stdout.write(failures.length === 0 ? '\ntest-jump: PASS\n' : `\ntest-jump: FAIL (${failures.length})\n`)
 process.exit(failures.length === 0 ? 0 : 1)
