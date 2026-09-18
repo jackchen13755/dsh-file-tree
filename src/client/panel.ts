@@ -131,6 +131,53 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+/** Extensions the panel previews as a picture (the official preview is text-only). */
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif', 'svg'])
+
+/**
+ * Whether a file should be previewed as a picture rather than opened in the
+ * official tab. The product's preview is a TEXT preview: it renders an image as
+ * "binary file" and an SVG as XML source, so pictures are shown here instead.
+ * @param path - workspace-relative path.
+ */
+function isImagePath(path: string): boolean {
+  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : ''
+  return IMAGE_EXTENSIONS.has(ext)
+}
+
+/** Per-session UI memory: which directories were expanded, and the last filter. */
+interface StoredViewState {
+  readonly expanded: readonly string[]
+  readonly filter: string
+}
+
+function storageKey(sessionId: string): string {
+  return `dsh-file-tree:${sessionId}`
+}
+
+function readStored(sessionId: string): StoredViewState {
+  try {
+    const raw = window.sessionStorage.getItem(storageKey(sessionId))
+    if (raw === null) return { expanded: [], filter: '' }
+    const parsed = JSON.parse(raw) as Partial<StoredViewState>
+    return {
+      expanded: Array.isArray(parsed.expanded) ? parsed.expanded.filter(item => typeof item === 'string') : [],
+      filter: typeof parsed.filter === 'string' ? parsed.filter : '',
+    }
+  } catch {
+    return { expanded: [], filter: '' }
+  }
+}
+
+function writeStored(sessionId: string, state: StoredViewState): void {
+  try {
+    window.sessionStorage.setItem(storageKey(sessionId), JSON.stringify(state))
+  } catch {
+    // A full or disabled sessionStorage must not break the panel.
+  }
+}
+
 /** Last path segment, for showing a hit's parent directory in search results. */
 function parentOf(path: string): string {
   const index = path.lastIndexOf('/')
@@ -210,7 +257,7 @@ export function FilePanel(props: FilePanelProps): ReactNode {
   const [loaded, setLoaded] = useState<Record<string, readonly EntryInfo[]>>({})
   const [expanding, setExpanding] = useState<readonly string[]>([])
   const [preview, setPreview] = useState<Preview | null>(null)
-  const [filter, setFilter] = useState('')
+  const [filter, setFilter] = useState(() => readStored(sessionId).filter)
   const [hits, setHits] = useState<readonly EntryInfo[] | null>(null)
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null)
@@ -241,7 +288,11 @@ export function FilePanel(props: FilePanelProps): ReactNode {
       const info = await call<ContextValue>('context', sessionId)
       setContext(info)
       const openPaths = Object.keys(loaded)
-      for (const path of openPaths.length === 0 ? [''] : openPaths) await listDirectory(path)
+      // First load of this session: restore the directories the user had open.
+      const restored = openPaths.length === 0 ? readStored(sessionId).expanded : openPaths
+      for (const path of restored.length === 0 ? [''] : ['', ...restored.filter(item => item !== '')]) {
+        await listDirectory(path)
+      }
     } catch (error) {
       report(error)
     } finally {
@@ -341,6 +392,12 @@ export function FilePanel(props: FilePanelProps): ReactNode {
     return () => clearTimeout(timer)
   }, [filter, report, sessionId])
 
+  // Remember the view for this session: the tab body unmounts when another tab
+  // is active, and losing the expansion on every switch is disorienting.
+  useEffect(() => {
+    writeStored(sessionId, { expanded: Object.keys(loaded).filter(path => path !== ''), filter })
+  }, [filter, loaded, sessionId])
+
   const rows = useMemo(() => {
     const out: Array<{ entry: EntryInfo; depth: number }> = []
     const walk = (dirPath: string, depth: number): void => {
@@ -390,7 +447,19 @@ export function FilePanel(props: FilePanelProps): ReactNode {
         },
         onMouseEnter: () => setHovered(entry.path),
         onMouseLeave: () => setHovered(previous => (previous === entry.path ? '' : previous)),
-        onClick: () => void (entry.dir ? toggleDirectory(entry) : openInTab(entry)),
+        onClick: () => {
+          if (entry.dir) {
+            void toggleDirectory(entry)
+            return
+          }
+          if (isImagePath(entry.path)) {
+            // The official preview cannot show a picture; render it here.
+            setNotice({ kind: 'info', text: `图片用行内预览显示（官方预览是文本预览）` })
+            void openFile(entry)
+            return
+          }
+          openInTab(entry)
+        },
       },
       // Indent rails: one per depth level, drawn as a faint vertical line.
       ...Array.from({ length: depth }, (_, index) => createElement('span', { key: `rail-${index}`, style: S.railCell })),
@@ -432,7 +501,15 @@ export function FilePanel(props: FilePanelProps): ReactNode {
           preview.kind === 'text' && preview.truncated === true
             ? createElement('span', { style: { ...S.size, color: TOKEN.danger } }, '已截断')
             : null,
-          createElement('button', { style: S.button, title: '在标签页用官方预览打开', onClick: () => openInTab({ path: preview.path, name: preview.path }) }, '↗ 标签打开'),
+          createElement(
+            'button',
+            {
+              style: S.button,
+              title: isImagePath(preview.path) ? '用文本方式查看源码（官方文本预览）' : '在标签页用官方预览打开',
+              onClick: () => openInTab({ path: preview.path, name: preview.path }),
+            },
+            isImagePath(preview.path) ? '↗ 源码' : '↗ 标签打开',
+          ),
           createElement('button', { style: S.button, title: '把该文件引用插入输入框', onClick: () => reference(preview.path) }, '＠ 引用'),
           createElement('button', { style: S.iconButton, title: '复制绝对路径', onClick: () => copyPath(preview.path) }, '⧉'),
           createElement('button', { style: S.iconButton, title: '关闭预览', onClick: () => setPreview(null) }, '✕'),

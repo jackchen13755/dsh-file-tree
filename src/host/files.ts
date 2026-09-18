@@ -35,6 +35,9 @@ const IMAGE_MIME: Record<string, string> = {
   bmp: 'image/bmp',
   ico: 'image/x-icon',
   avif: 'image/avif',
+  // SVG is text, but it is previewed as a picture: served as a data URL inside
+  // an <img>, where scripts cannot run — unlike inlining the markup.
+  svg: 'image/svg+xml',
 }
 
 function extensionOf(name: string): string {
