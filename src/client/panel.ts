@@ -30,6 +30,13 @@ import {
   wordAtPoint,
 } from './jump.js'
 
+/**
+ * Build stamp shown in the panel header. Bump it whenever behaviour changes: a
+ * page still running an older bundle shows an older stamp, which turns "it does
+ * not work" into a one-glance answer instead of a guessing game.
+ */
+const BUILD_STAMP = 'b7'
+
 /** Props the tab body receives from this plugin's `inject` factory. */
 export interface FilePanelProps {
   readonly sessionId: string
@@ -644,6 +651,9 @@ export function FilePanel(props: FilePanelProps): ReactNode {
       { style: S.header },
       createElement('span', { style: S.iconCell }, entryIcon({ path: '', name: workspaceName, dir: true, size: 0, mtime: 0 }, false)),
       createElement('span', { style: S.title, title: context?.workspace ?? '' }, workspaceName),
+      // Build stamp: a page that still runs an older bundle shows an older stamp,
+      // which turns "it does not work" into a one-glance answer.
+      createElement('span', { style: { ...S.parent, whiteSpace: 'nowrap' }, title: `dsh-file-tree ${BUILD_STAMP}` }, BUILD_STAMP),
       busy === '' ? null : createElement('span', { style: { ...S.size, color: TOKEN.dim } }, busy),
       createElement('span', { style: S.spacer }),
       createElement('button', { style: S.iconButton, title: '刷新（重新读取已展开的目录）', onClick: () => void refresh() }, '↻'),
