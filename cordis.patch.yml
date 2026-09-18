@@ -1,0 +1,15 @@
+# dsh-file-tree bundle patch: inserts the dual-face plugin row into the web profile.
+#
+#   dsh plugin --profile web add github:jackchen13755/dsh-file-tree
+#
+# The node half (exports ".") serves the workspace-gated filesystem routes under
+# /dsh-file-tree/*; the `dsh.client` manifest in package.json loads the browser
+# half, which registers the "文件面板" tab type in the native right sidebar.
+- insert:
+    - id: file-tree
+      name: 'dsh-file-tree'
+      # config:
+      #   readLimitBytes: 524288      # 文本预览上限
+      #   imageLimitBytes: 3145728    # 图片预览上限
+      #   listLimit: 2000             # 单目录条目上限
+      #   searchLimit: 200            # 搜索命中上限
