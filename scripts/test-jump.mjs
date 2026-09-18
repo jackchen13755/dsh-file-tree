@@ -141,6 +141,41 @@ check('a template class reaches its style rule',
 check('the sigil is not required for a style rule',
   jump.findDeclarationLine(['<style>', '.wrapper {', '}'], 'wrapper') === 2)
 
+// ── React + TypeScript shapes ───────────────────────────────────────────────
+check('props destructured in a signature are found',
+  jump.findDeclarationLine(['function Card({ title, onClick }: Props) {'], 'onClick') === 1)
+check('arrow component parameter destructuring is found',
+  jump.findDeclarationLine(['const Row = ({ item }) => <div />'], 'item') === 1)
+check('a hook binding is found',
+  jump.findDeclarationLine(['const [open, setOpen] = useState(false)'], 'setOpen') === 1)
+check('an interface member is found',
+  jump.findDeclarationLine(['interface Props {', '  onClick: () => void', '}'], 'onClick') === 2)
+check('a one-line type literal member is found',
+  jump.findDeclarationLine(['type Props = { title: string; count: number }'], 'count') === 1)
+check('a default-exported component is found',
+  jump.findDeclarationLine(['export default function App() {'], 'App') === 1)
+check('a typed component const is found',
+  jump.findDeclarationLine(['export const Button: React.FC<Props> = () => null'], 'Button') === 1)
+check('an import line is never a declaration',
+  jump.findDeclarationLine(['import { Button } from "./index"', 'export function App() {}'], 'Button') === undefined)
+check('a barrel re-export line is located as a fallback landing spot',
+  jump.findReexportLine(['export { Button } from "./Button"'], 'Button') === 1)
+check('an unrelated barrel line is not a fallback',
+  jump.findReexportLine(['export { A } from "./a"'], 'B') === undefined)
+
+check('a token inside a quoted path is treated as a path',
+  jump.quotedSpecifierAt("import { Button } from './index'", 'index') === './index')
+check('a symbol on an import line is NOT treated as a path',
+  jump.quotedSpecifierAt("import { Button } from './index'", 'Button') === undefined)
+
+// ── barrels (React index.ts files) ──────────────────────────────────────────
+check('a named barrel re-export is followed',
+  jump.reexportedFrom(['export { Button } from "./Button"'], 'Button') === './Button')
+check('a star barrel re-export is followed',
+  jump.reexportedFrom(['export * from "./widgets"'], 'Anything') === './widgets')
+check('an unrelated barrel entry is not followed',
+  jump.reexportedFrom(['export { A } from "./a"'], 'B') === undefined)
+
 rmSync(outDir, { recursive: true, force: true })
 process.stdout.write(failures.length === 0 ? '\ntest-jump: PASS\n' : `\ntest-jump: FAIL (${failures.length})\n`)
 process.exit(failures.length === 0 ? 0 : 1)

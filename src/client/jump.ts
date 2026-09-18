@@ -25,6 +25,13 @@ export function specifierLike(token: string): string | undefined {
   return undefined
 }
 
+/**
+ * An import/export-from statement. These never DECLARE anything a click should
+ * land on — their brace lists are what made the loose object-key pattern fire on
+ * `import { Button } from './index'` and report "the definition is on this line".
+ */
+const MODULE_STATEMENT = /^\s*(?:import|export)\b[^\n]*\bfrom\b|^\s*import\b/
+
 /** Declaration shapes searched for, most specific first. */
 function declarationPatterns(name: string): RegExp[] {
   // Sigils carry meaning: `@x`/`$x` are LESS/SCSS variables, `.x` names a class or
@@ -42,6 +49,11 @@ function declarationPatterns(name: string): RegExp[] {
     new RegExp(`\\b(?:export\\s+)?enum\\s+${boundary}`),
     // Destructuring bindings: `const { a, b } = …` / `const [x] = …`.
     new RegExp(`\\b(?:const|let|var)\\s*(?:\\{[^}]*${boundary}[^}]*\\}|\\[[^\\]]*${boundary}[^\\]]*\\])`),
+    // A re-export binding: `export { name } from './x'` (React barrels).
+    new RegExp(`^\\s*export\\s*(?:type\\s*)?\\{[^}]*${boundary}[^}]*\\}`),
+    // Parameter / argument destructuring, where no keyword precedes the braces:
+    // `function Card({ title, onClick }: Props)` and `({ item }) => …`.
+    new RegExp(`[(,]\\s*\\{[^}]*${boundary}[^}]*\\}`),
     // LESS / SCSS variables: `@gap: 8px;` / `$gap: 8px;`.
     new RegExp(`^\\s*[@$]${escaped}\\s*:`),
     // Class member / method / property starting a line.
@@ -50,7 +62,7 @@ function declarationPatterns(name: string): RegExp[] {
   ]
   if (/^[A-Za-z]/.test(bare)) {
     // Inline object key / shorthand: `{ name: … }`, `(, name)`, `{ name,`.
-    patterns.push(new RegExp(`[,{]\\s*${boundary}\\s*[:=(,}]`))
+    patterns.push(new RegExp(`[,{;]\\s*${boundary}\\s*[:=(,}]`))
     // A LESS mixin or CSS class declaration, then a Vue template's class="…".
     patterns.push(new RegExp(`^\\s*\\.${escaped}\\s*[{(,:]`))
     patterns.push(new RegExp(`class=["'][^"']*\\b${escaped}\\b`))
@@ -67,8 +79,28 @@ export function findDeclarationLine(lines: readonly string[], name: string): num
   if (name === '') return undefined
   for (const pattern of declarationPatterns(name)) {
     for (let index = 0; index < lines.length; index += 1) {
-      if (pattern.test(lines[index] ?? '')) return index + 1
+      const line = lines[index] ?? ''
+      if (MODULE_STATEMENT.test(line)) continue
+      if (pattern.test(line)) return index + 1
     }
+  }
+  return undefined
+}
+
+/**
+ * The line that re-exports `name` onward, used as a landing spot when the
+ * onward file cannot be resolved.
+ * @param lines - the file's lines.
+ * @param name - the clicked identifier.
+ */
+export function findReexportLine(lines: readonly string[], name: string): number | undefined {
+  const wanted = new RegExp(`\\b${escapeRegExp(name)}\\b`)
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? ''
+    const statement = /^\s*export\s+(?:\*|\{([^}]*)\})\s*from\s*['"]([^'"]+)['"]/.exec(line)
+    if (statement === null) continue
+    const bindings = statement[1]
+    if (bindings === undefined || wanted.test(bindings)) return index + 1
   }
   return undefined
 }
@@ -290,4 +322,50 @@ export function memberReceiver(lineText: string, token: string): string | undefi
   while (index >= 0 && /[\w$]/.test(lineText[index] ?? '')) index -= 1
   const receiver = lineText.slice(index + 1, end)
   return receiver === '' ? undefined : receiver
+}
+
+/**
+ * A re-export that carries `name` onward: `export { name } from './x'` or a bare
+ * `export * from './x'`.
+ *
+ * React code is full of barrel files (`components/index.ts`), and without this a
+ * click on a symbol imported from a barrel would stop at the barrel's first line.
+ *
+ * @param lines - the candidate file's lines.
+ * @param name - the clicked identifier.
+ * @returns the specifier to follow, or undefined when the file does not re-export.
+ */
+export function reexportedFrom(lines: readonly string[], name: string): string | undefined {
+  const wanted = new RegExp(`\\b${escapeRegExp(name)}\\b`)
+  for (const line of lines) {
+    const statement = /^\s*export\s+(?:\*|\{([^}]*)\})\s*from\s*['"]([^'"]+)['"]/.exec(line)
+    if (statement === null) continue
+    const bindings = statement[1]
+    if (bindings === undefined) return statement[2]
+    if (wanted.test(bindings)) return statement[2]
+  }
+  return undefined
+}
+
+/**
+ * The quoted specifier a token sits INSIDE, if any.
+ *
+ * `quotedSpecifierOn` answers "does this line contain a path?", which is the
+ * wrong question when the click landed on a symbol: in
+ * `import { Button } from './index'` a click on `Button` must jump to `Button`,
+ * not open `./index`. Position is what separates the two cases.
+ *
+ * @param lineText - the rendered line's text.
+ * @param token - the clicked identifier.
+ * @returns the quoted path containing the token, or undefined.
+ */
+export function quotedSpecifierAt(lineText: string, token: string): string | undefined {
+  const quoted = /['"`]([^'"`]*)['"`]/g
+  let match = quoted.exec(lineText)
+  while (match !== null) {
+    const inner = match[1] ?? ''
+    if (inner.includes(token) && specifierLike(inner) !== undefined) return inner
+    match = quoted.exec(lineText)
+  }
+  return undefined
 }

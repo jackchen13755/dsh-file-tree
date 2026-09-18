@@ -276,7 +276,8 @@ export function apply(ctx: ClientContext): void {
             token,
             lineText,
             line,
-            resolve: specifier => call<{ path: string | null; reason?: string; rule?: string }>('resolve', sessionId, { path, specifier }),
+            resolveFrom: (from, specifier) =>
+              call<{ path: string | null; reason?: string; rule?: string }>('resolve', sessionId, { path: from, specifier }),
             readLines: async target2 =>
               call<Preview>('read', sessionId, { path: target2 })
                 .then(value => (value.content ?? '').split('\n'))

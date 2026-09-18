@@ -44,6 +44,7 @@
   1. **本文件内的声明** —— `function/class/interface/type/const/let/var/enum`，以及**方法/属性行**（`name(...)`、`name: (...) =>`、`get name()` 等），命中就滚动并高亮该行
   2. **直接 import 的符号** → 顺相对 import 到目标文件里找声明，**带行号打开**
   3. **成员方法**：`service.doThing()` 这类点 `doThing` —— 取 `.` 前的接收者 `service`，顺**它的** import 到目标文件里找 `doThing(...)` 并带行号打开（`this.xxx()` 走第 1 级）
+  3.5 **barrel 文件**（React 工程到处都是 `components/index.ts`）：目标文件只是 `export { X } from './X'` / `export * from './X'` 时**继续往下跳**（最多 3 跳），落到真正声明它的文件与行；万一再导出指向的模块解析不到，就停在那一行。点 import 行上的**符号**会跳符号（不会误开模块），点**引号里的路径**才开模块
   4. 都不成立就明说原因：接收者不是本文件导入的 / 需要语言服务 / 无法解析该模块
 - 包名（`some-package`，含被引号包起来的）会明确回一句「是包名，本面板不做 node_modules 解析」，而不是假装找不到定义
 - 按住 Ctrl/Cmd 悬停会**给可跳转的 token 加下划线**；同文件跳转会**滚动并高亮目标行**
@@ -98,7 +99,7 @@ dsh plugin --profile web add link:/path/to/dsh-file-tree
 ```sh
 bash scripts/build.sh          # host 半 tsc → lib/；client 半 tsc + 自写 CJS 内联 → lib/client.js
 node scripts/smoke-client.mjs  # 浏览器半冒烟：按 ModuleLoader 契约加载并断言注册
-node scripts/test-jump.mjs     # 跳转判定逻辑单测（15 例：同文件方法/跨文件成员/接收者/import 追踪/路径识别）
+node scripts/test-jump.mjs     # 跳转判定单测（40+ 例：变量/方法/解构/props/接口成员/barrel/别名/路径识别）
 ```
 
 类型来自真实 DSH 安装（脚本自动探测 `$DSH_HOME/profiles/*`、`$DSH_CHECKOUT`、npx 缓存，可用 `DSH_CHECKOUT=` 指定）。
@@ -128,6 +129,7 @@ src/client/reference.ts  @文件 文法与插入输入框
 - 行内预览的着色由产品的 `CodeBlock` 提供（未自带高亮器）；若某个组合里产品没提供 `ui-primitives`，会自动降级为无着色的行号 `<pre>`。
 - 跳转只跟随**相对** import/require：`tsconfig` 的 `paths` 别名、`node_modules`、以及**接收者不是本文件导入**的成员（局部变量、父类成员、动态对象）都定位不了，会明确说明而不是给错行。
 - 成员定位是**同名匹配**（按 `name(...)` 声明形态在目标文件里找），不做类型/重载区分；同名方法多处声明时取第一处。
+- 普通函数参数（非解构）、跨文件但本文件没 import 的符号、`node_modules` 里的包、动态计算的别名都定位不了，会明确说明。
 - 二进制文件（pdf/docx/zip 等）不预览（明确提示），不做下载/编辑/新建/删除 —— 这个插件的定位是"看"和"引用"。
 - 图片按原始尺寸显示（大图受容器宽度限制），不做缩放/旋转/灯箱。
 
