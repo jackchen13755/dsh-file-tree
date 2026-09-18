@@ -41,7 +41,8 @@
   4. **源码根**：`src` 等（webpack `resolve.modules` 里声明的也算）
   每一条都按「原样 → 追加后缀 → 替换后缀（`./b.js`→`./b.ts`）→ 目录 `index.*`（含 `index.vue`）」逐级尝试，且**只返回文件**：命名到目录时给它的 `index.*`，绝不返回目录本身。命中哪条规则会写进提示里
 - **标识符 / 方法** → 四级，逐级降级：
-  1. **本文件内的声明** —— `function/class/interface/type/const/let/var/enum`，以及**方法/属性行**（`name(...)`、`name: (...) =>`、`get name()` 等），命中就滚动并高亮该行
+  1. **本文件内的声明** —— `function/class/interface/type/const/let/var/enum`、**解构绑定** `const { a, b } = …` / `const [x] = …`、**行内对象键** `{ retries: 3 }`、**方法/属性行**（`name(...)`、`name = () =>`、`get name()`、Vue options 的 `methods: { doIt() {} }`）、**参数解构** `function Card({ title, onClick }: Props)`、**hook 绑定** `const [open, setOpen] = useState()`、**一行内的类型字面量** `type Props = { a: string; b: number }`、`export default function App()`、`React.FC<Props>` 常量组件、类字段箭头函数；**LESS/SCSS 变量** `@gap:` / `$brand:`、**样式规则** `.wrapper {`（Vue 模板里点 `class="wrapper box"` 也能落到该规则）。命中就滚动并高亮该行
+     `import … from` / `export … from` 这类**模块语句永不算"声明行"**（否则 import 里的 `{ X, Y }` 会被当成对象键而误报"定义就在本行"）
   2. **直接 import 的符号** → 顺相对 import 到目标文件里找声明，**带行号打开**
   3. **成员方法**：`service.doThing()` 这类点 `doThing` —— 取 `.` 前的接收者 `service`，顺**它的** import 到目标文件里找 `doThing(...)` 并带行号打开（`this.xxx()` 走第 1 级）
   3.5 **barrel 文件**（React 工程到处都是 `components/index.ts`）：目标文件只是 `export { X } from './X'` / `export * from './X'` 时**继续往下跳**（最多 3 跳），落到真正声明它的文件与行；万一再导出指向的模块解析不到，就停在那一行。点 import 行上的**符号**会跳符号（不会误开模块），点**引号里的路径**才开模块
