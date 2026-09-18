@@ -181,3 +181,66 @@ export async function searchFiles(
   }
   return hits
 }
+
+/** Extensions tried, in order, when a specifier omits one. */
+const RESOLVE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.vue', '.svelte', '.py', '.md', '.css', '.scss']
+/** Directory index files tried when the specifier names a directory. */
+const RESOLVE_INDEXES = ['index.ts', 'index.tsx', 'index.js', 'index.jsx', 'index.mjs', 'index.cjs', 'index.json', '__init__.py']
+
+/**
+ * Resolve a module specifier written inside one workspace file to another file
+ * in the same workspace.
+ *
+ * Only relative specifiers are resolved: a bare package name would need
+ * node_modules resolution and a TypeScript program, which this panel does not
+ * pretend to be. Containment is re-checked on the result, so `../../..` cannot
+ * escape the workspace even though the specifier came from file content.
+ *
+ * @param workspace - workspace root.
+ * @param from - the file the specifier was written in (workspace-relative).
+ * @param specifier - the raw specifier, e.g. `./api` or `../util/index.js`.
+ * @returns the resolved workspace-relative path, or null with a reason.
+ */
+export async function resolveSpecifier(
+  workspace: string,
+  from: string,
+  specifier: string,
+): Promise<{ path: string | null; reason?: string }> {
+  const raw = specifier.trim()
+  if (raw === '') return { path: null, reason: 'empty' }
+  if (!raw.startsWith('./') && !raw.startsWith('../') && !raw.startsWith('/')) {
+    return { path: null, reason: 'bare-specifier' }
+  }
+  const fromDirectory = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : ''
+  const segments = `${fromDirectory}/${raw}`.split('/')
+  const normalized: string[] = []
+  for (const segment of segments) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      if (normalized.length === 0) return { path: null, reason: 'escapes-workspace' }
+      normalized.pop()
+      continue
+    }
+    normalized.push(segment)
+  }
+  const base = normalized.join('/')
+  // Candidates in the order a module resolver tries them: the specifier as
+  // written, then with each known extension appended (`./b` → `./b.ts`), then
+  // with its own extension REPLACED (`./b.js` → `./b.ts`) — the ESM-in-TypeScript
+  // spelling that appending alone can never produce.
+  const slash = base.lastIndexOf('/')
+  const dot = base.lastIndexOf('.')
+  const stem = dot > slash ? base.slice(0, dot) : base
+  const candidates = new Set<string>([base])
+  for (const extension of RESOLVE_EXTENSIONS) candidates.add(`${base}${extension}`)
+  if (dot > slash) for (const extension of RESOLVE_EXTENSIONS) candidates.add(`${stem}${extension}`)
+  for (const candidate of candidates) {
+    if (candidate === '') continue
+    if (resolvePath(workspace, candidate) !== null) return { path: candidate }
+  }
+  for (const index of RESOLVE_INDEXES) {
+    const candidate = `${base}/${index}`
+    if (resolvePath(workspace, candidate) !== null) return { path: candidate }
+  }
+  return { path: null, reason: 'not-found' }
+}

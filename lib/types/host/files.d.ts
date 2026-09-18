@@ -53,3 +53,21 @@ export declare function readPreview(workspace: string, relative: string, textLim
  * @param maxDepth - directory depth ceiling.
  */
 export declare function searchFiles(workspace: string, query: string, limit: number, maxDepth: number): Promise<EntryInfo[]>;
+/**
+ * Resolve a module specifier written inside one workspace file to another file
+ * in the same workspace.
+ *
+ * Only relative specifiers are resolved: a bare package name would need
+ * node_modules resolution and a TypeScript program, which this panel does not
+ * pretend to be. Containment is re-checked on the result, so `../../..` cannot
+ * escape the workspace even though the specifier came from file content.
+ *
+ * @param workspace - workspace root.
+ * @param from - the file the specifier was written in (workspace-relative).
+ * @param specifier - the raw specifier, e.g. `./api` or `../util/index.js`.
+ * @returns the resolved workspace-relative path, or null with a reason.
+ */
+export declare function resolveSpecifier(workspace: string, from: string, specifier: string): Promise<{
+    path: string | null;
+    reason?: string;
+}>;

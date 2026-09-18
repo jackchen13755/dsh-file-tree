@@ -10,7 +10,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { isLoopback, sessionRoot } from './fence.js'
-import { listDirectory, readPreview, searchFiles } from './files.js'
+import { listDirectory, readPreview, resolveSpecifier, searchFiles } from './files.js'
 import { webServerOf } from './services.js'
 
 /** Route prefix owned by this plugin. */
@@ -31,6 +31,8 @@ interface RequestBody {
   readonly sessionId?: unknown
   readonly path?: unknown
   readonly query?: unknown
+  readonly from?: unknown
+  readonly specifier?: unknown
 }
 
 const MAX_BODY_BYTES = 64 * 1024
@@ -128,6 +130,11 @@ export function registerRoutes(ctx: Context, options: RouteOptions): () => void 
             return
           }
           send(response, 200, { ok: true, value: preview })
+          return
+        }
+        case 'resolve': {
+          const resolved = await resolveSpecifier(workspace, relative, str(body.specifier))
+          send(response, 200, { ok: true, value: resolved })
           return
         }
         case 'search': {

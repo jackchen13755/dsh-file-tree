@@ -15,12 +15,13 @@ import { createElement, useCallback, useEffect, useMemo, useRef, useState, type 
 import { call, FilePanelError, type ContextValue, type EntryInfo, type Preview } from './api.js'
 import { insertReference } from './reference.js'
 import { languageForPath } from './tab.js'
+import { findDeclarationLine, importedFrom, lineElements, lineIndexOf, quotedSpecifierOn, revealLine, specifierLike, trackJumpAffordance, wordAtPoint } from './jump.js'
 
 /** Props the tab body receives from this plugin's `inject` factory. */
 export interface FilePanelProps {
   readonly sessionId: string
   /** Open a workspace file in a native tab (the shipped preview); see `tab.ts`. */
-  readonly openResource: (path: string) => { ok: boolean; reason?: string }
+  readonly openResource: (path: string, line?: number) => { ok: boolean; reason?: string }
 }
 
 type PrimitiveComponent = (props: Record<string, unknown>) => ReactNode
@@ -61,6 +62,11 @@ const TOKEN = {
 /** One indent step, shared by the rails and the row padding. */
 const INDENT = 12
 const ROW_HEIGHT = 21
+
+/** Text of one rendered line, used by the specifier fallback. */
+function containerLineText(container: HTMLElement, line: number): string | undefined {
+  return lineElements(container)[line - 1]?.textContent ?? undefined
+}
 
 const S = {
   root: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, fontSize: 12, lineHeight: 1.45, color: TOKEN.text },
@@ -146,10 +152,13 @@ function isImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(ext)
 }
 
-/** Per-session UI memory: which directories were expanded, and the last filter. */
+/**
+ * Per-session UI memory: which directories were expanded. The search text is
+ * deliberately NOT remembered — a panel that opens showing stale search results
+ * is more confusing than helpful.
+ */
 interface StoredViewState {
   readonly expanded: readonly string[]
-  readonly filter: string
 }
 
 function storageKey(sessionId: string): string {
@@ -159,14 +168,13 @@ function storageKey(sessionId: string): string {
 function readStored(sessionId: string): StoredViewState {
   try {
     const raw = window.sessionStorage.getItem(storageKey(sessionId))
-    if (raw === null) return { expanded: [], filter: '' }
+    if (raw === null) return { expanded: [] }
     const parsed = JSON.parse(raw) as Partial<StoredViewState>
     return {
       expanded: Array.isArray(parsed.expanded) ? parsed.expanded.filter(item => typeof item === 'string') : [],
-      filter: typeof parsed.filter === 'string' ? parsed.filter : '',
     }
   } catch {
-    return { expanded: [], filter: '' }
+    return { expanded: [] }
   }
 }
 
@@ -257,11 +265,12 @@ export function FilePanel(props: FilePanelProps): ReactNode {
   const [loaded, setLoaded] = useState<Record<string, readonly EntryInfo[]>>({})
   const [expanding, setExpanding] = useState<readonly string[]>([])
   const [preview, setPreview] = useState<Preview | null>(null)
-  const [filter, setFilter] = useState(() => readStored(sessionId).filter)
+  const [filter, setFilter] = useState('')
   const [hits, setHits] = useState<readonly EntryInfo[] | null>(null)
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null)
   const [hovered, setHovered] = useState('')
+  const previewBody = useRef<HTMLElement | null>(null)
   const busyRef = useRef(false)
 
   const report = useCallback((error: unknown): void => {
@@ -358,6 +367,111 @@ export function FilePanel(props: FilePanelProps): ReactNode {
     [openResource],
   )
 
+  /**
+   * Ctrl/Cmd-click inside the preview: resolve a module specifier to another
+   * file, or jump to an identifier's declaration in this file.
+   */
+  const jumpFromPreview = useCallback(
+    (event: {
+      ctrlKey: boolean
+      metaKey: boolean
+      target: unknown
+      clientX?: number
+      clientY?: number
+      preventDefault?: () => void
+    }): void => {
+      if (!event.ctrlKey && !event.metaKey) return
+      const body = previewBody.current
+      const previewPath = preview?.path
+      if (body === null || previewPath === undefined) return
+      // Prefer the word actually under the cursor; fall back to the element's
+      // text when the browser cannot resolve a caret (e.g. a synthetic event).
+      const pointed =
+        event.clientX === undefined || event.clientY === undefined ? undefined : wordAtPoint(event.clientX, event.clientY)
+      const elementText = ((event.target as HTMLElement | null)?.textContent ?? '').trim()
+      const token = (pointed ?? (elementText.length <= 80 ? elementText : '')).trim()
+      if (token === '') return
+      event.preventDefault?.()
+      const line = lineIndexOf(body, event.target as Element | null)
+      const lineText = line === undefined ? '' : (containerLineText(body, line) ?? '')
+      const specifier = specifierLike(token) ?? quotedSpecifierOn(lineText)
+      if (specifier !== undefined) {
+        void call<{ path: string | null; reason?: string }>('resolve', sessionId, { path: previewPath, specifier })
+          .then(result => {
+            if (result.path === null) {
+              setNotice({
+                kind: 'error',
+                text:
+                  result.reason === 'bare-specifier'
+                    ? `「${specifier}」是包名，本面板不做 node_modules 解析`
+                    : `无法解析「${specifier}」（${result.reason ?? 'unknown'}）`,
+              })
+              return
+            }
+            const target = result.path
+            if (isImagePath(target)) {
+              setNotice({ kind: 'info', text: `跳转到图片 ${target}（行内预览）` })
+              void openFile({ path: target, name: target, dir: false, size: 0, mtime: 0 })
+              return
+            }
+            const opened = openResource(target, 1)
+            setNotice(
+              opened.ok
+                ? { kind: 'info', text: `跳转到 ${target}（标签页官方预览）` }
+                : { kind: 'error', text: opened.reason ?? '打开失败' },
+            )
+          })
+          .catch(report)
+        return
+      }
+      // Identifier, three levels: declared here, imported relatively, unknown.
+      const lines = (preview?.content ?? '').split('\n')
+      const declared = findDeclarationLine(lines, token)
+      if (declared !== undefined) {
+        if (declared === line) {
+          setNotice({ kind: 'info', text: `${token} 的定义就在本行` })
+          return
+        }
+        if (revealLine(body, declared)) {
+          setNotice({ kind: 'info', text: `跳到第 ${declared} 行（${token} 的定义）` })
+          return
+        }
+      }
+      const imported = importedFrom(lines, token)
+      if (imported !== undefined) {
+        // Follow the import: resolve it, find the declaration in the target file,
+        // and open that file at that line.
+        void call<{ path: string | null; reason?: string }>('resolve', sessionId, { path: previewPath, specifier: imported })
+          .then(async result => {
+            if (result.path === null) {
+              setNotice({ kind: 'error', text: `${token} 来自「${imported}」，但无法解析该模块` })
+              return
+            }
+            const target = result.path
+            const targetLines = await call<Preview>('read', sessionId, { path: target })
+              .then(value => (value.content ?? '').split('\n'))
+              .catch(() => [] as string[])
+            const targetLine = findDeclarationLine(targetLines, token)
+            const opened = openResource(target, targetLine ?? 1)
+            setNotice(
+              opened.ok
+                ? {
+                    kind: 'info',
+                    text: targetLine === undefined
+                      ? `跳转到 ${target}（${token} 由「${imported}」导入，未在目标内定位到定义）`
+                      : `跳转到 ${target} 第 ${targetLine} 行（${token} 的定义）`,
+                  }
+                : { kind: 'error', text: opened.reason ?? '打开失败' },
+            )
+          })
+          .catch(report)
+        return
+      }
+      setNotice({ kind: 'error', text: `没有找到「${token}」的定义（跨文件的符号解析需要语言服务，本面板只跟随相对 import）` })
+    },
+    [openFile, openResource, preview, report, sessionId],
+  )
+
   const reference = useCallback((path: string): void => {
     const result = insertReference(path)
     setNotice(
@@ -395,8 +509,8 @@ export function FilePanel(props: FilePanelProps): ReactNode {
   // Remember the view for this session: the tab body unmounts when another tab
   // is active, and losing the expansion on every switch is disorienting.
   useEffect(() => {
-    writeStored(sessionId, { expanded: Object.keys(loaded).filter(path => path !== ''), filter })
-  }, [filter, loaded, sessionId])
+    writeStored(sessionId, { expanded: Object.keys(loaded).filter(path => path !== '') })
+  }, [loaded, sessionId])
 
   const rows = useMemo(() => {
     const out: Array<{ entry: EntryInfo; depth: number }> = []
@@ -484,6 +598,12 @@ export function FilePanel(props: FilePanelProps): ReactNode {
     )
   }
 
+  useEffect(() => {
+    const body = previewBody.current
+    if (body === null) return undefined
+    return trackJumpAffordance(body)
+  }, [preview])
+
   const workspaceName = context === null ? '…' : (context.workspace.split('/').filter(Boolean).pop() ?? context.workspace)
 
   const previewPane =
@@ -515,7 +635,16 @@ export function FilePanel(props: FilePanelProps): ReactNode {
           createElement('button', { style: S.iconButton, title: '关闭预览', onClick: () => setPreview(null) }, '✕'),
         ),
         preview.kind === 'text'
-          ? textPreview(preview.content ?? '', preview.path)
+          ? createElement(
+            'div',
+            {
+              ref: (element: unknown) => { previewBody.current = (element ?? null) as HTMLElement | null },
+              style: { flex: 1, minHeight: 0, overflow: 'auto' },
+              onClick: jumpFromPreview,
+              title: 'Ctrl/Cmd + 点击：跳到定义或打开 import 的文件',
+            },
+            textPreview(preview.content ?? '', preview.path),
+          )
           : preview.kind === 'image'
             ? createElement(
               'div',

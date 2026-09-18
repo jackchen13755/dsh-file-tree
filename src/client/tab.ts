@@ -35,7 +35,8 @@ export function sessionFileAddress(sessionId: string, path: string): string {
 
 /** The controller face this plugin uses; only `openResource` is required. */
 export interface SidebarRightLike {
-  openResource(address: string, options?: { revealIfOpened?: boolean }): void
+  /** `params.line` is the `file` resource provider's declared 1-based line anchor. */
+  openResource(address: string, options?: { revealIfOpened?: boolean; params?: { line?: number } }): void
 }
 
 /** What an open attempt did, for the panel's notice line. */
@@ -50,18 +51,20 @@ export interface OpenResult {
  * @param controller - `ctx.get('sidebarRight')`, probed at call time.
  * @param sessionId - the session the panel is drawn in.
  * @param path - workspace-relative path.
+ * @param line - optional 1-based line to reveal in the preview.
  */
 export function openFileInTab(
   controller: SidebarRightLike | undefined,
   sessionId: string,
   path: string,
+  line?: number,
 ): OpenResult {
   const address = sessionFileAddress(sessionId, path)
   if (controller === undefined || typeof controller.openResource !== 'function') {
     return { ok: false, address, reason: '当前 DSH 没有提供侧栏控制器，已改用行内预览' }
   }
   try {
-    controller.openResource(address, { revealIfOpened: true })
+    controller.openResource(address, line === undefined || line < 1 ? { revealIfOpened: true } : { revealIfOpened: true, params: { line } })
     return { ok: true, address }
   } catch (error) {
     return { ok: false, address, reason: String((error as Error)?.message ?? error) }

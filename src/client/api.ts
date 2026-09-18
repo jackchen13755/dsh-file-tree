@@ -67,9 +67,13 @@ interface Envelope<T> {
  * Call one operation.
  * @param operation - route suffix: `context`, `list`, `read`, `search`.
  * @param sessionId - the session the panel is drawn in.
- * @param fields - operation parameters (`path`, `query`).
+ * @param fields - operation parameters (`path`, `query`, `specifier`).
  */
-export async function call<T>(operation: string, sessionId: string, fields: { path?: string; query?: string } = {}): Promise<T> {
+export async function call<T>(
+  operation: string,
+  sessionId: string,
+  fields: { path?: string; query?: string; specifier?: string } = {},
+): Promise<T> {
   const response = await fetch(`/dsh-file-tree/${operation}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

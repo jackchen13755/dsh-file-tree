@@ -89,11 +89,11 @@ export function apply(ctx: ClientContext): void {
               sessionId,
               // Probing the controller per open keeps this plugin working on a
               // profile whose sidebar is composed differently.
-              openResource: (path: string) =>
-                openFileInTab(ctx.get('sidebarRight') as SidebarRightLike | undefined, sessionId, path),
+              openResource: (path: string, line?: number) =>
+                openFileInTab(ctx.get('sidebarRight') as SidebarRightLike | undefined, sessionId, path, line),
             }),
           },
-          (props: { sessionId: string; openResource: (path: string) => OpenResult }): ReactNode => FilePanel(props),
+          (props: { sessionId: string; openResource: (path: string, line?: number) => OpenResult }): ReactNode => FilePanel(props),
         ),
       ),
     'dsh-file-tree: panel body',
