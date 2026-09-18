@@ -24,7 +24,7 @@ export interface JumpHost {
   readonly lineText: string
   readonly line: number | undefined
   /** Resolve a specifier against this session's workspace. */
-  readonly resolve: (specifier: string) => Promise<{ path: string | null; reason?: string }>
+  readonly resolve: (specifier: string) => Promise<{ path: string | null; reason?: string; rule?: string }>
   /** Read another file's lines. */
   readonly readLines: (path: string) => Promise<readonly string[]>
   /** Open a file in a native tab, optionally at a line. */
@@ -81,7 +81,8 @@ export async function runJump(host: JumpHost): Promise<void> {
       specifierFailure(host, specifier, result.reason)
       return
     }
-    openTarget(host, result.path, undefined, `由 ${host.path} 的「${specifier}」解析`)
+    const rule = result.rule === undefined || result.rule === '' ? '' : `，规则 ${result.rule}`
+    openTarget(host, result.path, undefined, `由 ${host.path} 的「${specifier}」解析${rule}`)
     return
   }
 

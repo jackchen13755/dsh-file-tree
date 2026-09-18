@@ -10,6 +10,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { isLoopback, sessionRoot } from './fence.js'
+import { aliasTable } from './aliases.js'
 import { listDirectory, readPreview, resolveSpecifier, searchFiles } from './files.js'
 import { webServerOf } from './services.js'
 
@@ -133,7 +134,9 @@ export function registerRoutes(ctx: Context, options: RouteOptions): () => void 
           return
         }
         case 'resolve': {
-          const resolved = await resolveSpecifier(workspace, relative, str(body.specifier))
+          // Aliases come from the workspace's own config (tsconfig paths, webpack
+          // resolve.alias) so project-internal specifiers resolve like the build does.
+          const resolved = await resolveSpecifier(workspace, relative, str(body.specifier), await aliasTable(workspace))
           send(response, 200, { ok: true, value: resolved })
           return
         }

@@ -421,7 +421,7 @@ export function FilePanel(props: FilePanelProps): ReactNode {
       event.preventDefault?.()
       const specifier = specifierLike(token) ?? quotedSpecifierOn(lineText)
       if (specifier !== undefined) {
-        void call<{ path: string | null; reason?: string }>('resolve', sessionId, { path: previewPath, specifier })
+        void call<{ path: string | null; reason?: string; rule?: string }>('resolve', sessionId, { path: previewPath, specifier })
           .then(result => {
             if (result.path === null) {
               setNotice({
@@ -466,7 +466,7 @@ export function FilePanel(props: FilePanelProps): ReactNode {
       if (imported !== undefined) {
         // Follow the import: resolve it, find the declaration in the target file,
         // and open that file at that line.
-        void call<{ path: string | null; reason?: string }>('resolve', sessionId, { path: previewPath, specifier: imported })
+        void call<{ path: string | null; reason?: string; rule?: string }>('resolve', sessionId, { path: previewPath, specifier: imported })
           .then(async result => {
             if (result.path === null) {
               setNotice({ kind: 'error', text: `${token} 来自「${imported}」，但无法解析该模块` })
@@ -498,7 +498,7 @@ export function FilePanel(props: FilePanelProps): ReactNode {
       if (receiver !== undefined && receiver !== 'this') {
         const receiverSpecifier = importedFrom(lines, receiver)
         if (receiverSpecifier !== undefined) {
-          void call<{ path: string | null; reason?: string }>('resolve', sessionId, { path: previewPath, specifier: receiverSpecifier })
+          void call<{ path: string | null; reason?: string; rule?: string }>('resolve', sessionId, { path: previewPath, specifier: receiverSpecifier })
             .then(async result => {
               if (result.path === null) {
                 setNotice({ kind: 'error', text: `${receiver} 来自「${receiverSpecifier}」，但无法解析该模块` })

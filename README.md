@@ -34,7 +34,12 @@
 - 展开状态与搜索词按会话记住（`sessionStorage`）：切到别的标签再切回来，树还是你离开时那样
 
 **Ctrl/Cmd + 点击跳转**（**行内 `▤` 预览**与**点文件行开出的官方预览标签**里都生效）：
-- **import / require 的模块路径** → 宿主按工作区解析（`./b`、`./b.js`→`b.ts`、`./b.tsx`→`b.ts`、目录 `index.*`，含后缀替换这类 ESM/TS 互操作写法），解析到就**在该文件的标签页打开**（官方预览），解析不到会说明原因
+- **import / require 的模块路径** → 宿主按工作区解析，解析到就**在该文件的标签页打开**（官方预览），解析不到会说明原因。解析顺序：
+  1. **相对路径** `./x` `../x`（含 `..` 归一化）
+  2. **工作区别名**：读项目自己的配置 —— `tsconfig.json`/`jsconfig.json` 的 `compilerOptions.paths`+`baseUrl`（如 `isomorph/*`、`@models/*`、`IndexRouter` 这种精确映射），以及 webpack 风格配置里的 `resolve.alias` 与 `resolve.modules`
+  3. **顶层目录**：首个路径段是本工作区的真实目录就直接解析（如 `isomorph/components/X`）
+  4. **源码根**：`src` 等（webpack `resolve.modules` 里声明的也算）
+  每一条都按「原样 → 追加后缀 → 替换后缀（`./b.js`→`./b.ts`）→ 目录 `index.*`（含 `index.vue`）」逐级尝试，且**只返回文件**：命名到目录时给它的 `index.*`，绝不返回目录本身。命中哪条规则会写进提示里
 - **标识符 / 方法** → 四级，逐级降级：
   1. **本文件内的声明** —— `function/class/interface/type/const/let/var/enum`，以及**方法/属性行**（`name(...)`、`name: (...) =>`、`get name()` 等），命中就滚动并高亮该行
   2. **直接 import 的符号** → 顺相对 import 到目标文件里找声明，**带行号打开**

@@ -1,3 +1,4 @@
+import { type AliasTable } from './aliases.js';
 /** One row of a directory listing. */
 export interface EntryInfo {
     /** Basename. */
@@ -54,20 +55,27 @@ export declare function readPreview(workspace: string, relative: string, textLim
  */
 export declare function searchFiles(workspace: string, query: string, limit: number, maxDepth: number): Promise<EntryInfo[]>;
 /**
- * Resolve a module specifier written inside one workspace file to another file
+ * Resolve a module specifier written inside one workspace file to another FILE
  * in the same workspace.
  *
- * Only relative specifiers are resolved: a bare package name would need
- * node_modules resolution and a TypeScript program, which this panel does not
- * pretend to be. Containment is re-checked on the result, so `../../..` cannot
- * escape the workspace even though the specifier came from file content.
+ * Sources, in order: a relative path (`./x`, `../x`), a workspace-absolute path,
+ * the workspace's alias table (tsconfig `paths`, webpack `resolve.alias`), the
+ * workspace root itself, then the source roots (`src`, webpack `resolve.modules`).
+ * Each base is tried as-is, with each known extension appended, with its own
+ * extension REPLACED (`./b.js` → `./b.ts`), and finally as a directory whose
+ * `index.*` is the target — the shape `import x from './DropWrapper'` relies on.
+ *
+ * Only regular files are returned: a specifier that names a directory resolves to
+ * that directory's index file or fails, never to the directory itself.
  *
  * @param workspace - workspace root.
  * @param from - the file the specifier was written in (workspace-relative).
- * @param specifier - the raw specifier, e.g. `./api` or `../util/index.js`.
- * @returns the resolved workspace-relative path, or null with a reason.
+ * @param specifier - the raw specifier, e.g. `./api` or `isomorph/components/X`.
+ * @param table - the workspace's alias table (see `aliases.ts`).
+ * @returns the resolved workspace-relative path plus the rule that matched, or a reason.
  */
-export declare function resolveSpecifier(workspace: string, from: string, specifier: string): Promise<{
+export declare function resolveSpecifier(workspace: string, from: string, specifier: string, table: AliasTable): Promise<{
     path: string | null;
+    rule?: string;
     reason?: string;
 }>;
