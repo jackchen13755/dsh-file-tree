@@ -154,6 +154,9 @@ export function lineElements(container: HTMLElement): HTMLElement[] {
   if (byAttribute.length > 0) return byAttribute
   const byClass = [...content.querySelectorAll<HTMLElement>('.line')]
   if (byClass.length > 0) return byClass
+  // The product's own preview renders through CodeMirror: one element per line.
+  const byCodeMirror = [...container.querySelectorAll<HTMLElement>('.cm-line')]
+  if (byCodeMirror.length > 0) return byCodeMirror
   const pre = content.querySelector('pre')
   if (pre !== null) {
     const children = [...pre.children].filter((child): child is HTMLElement => child instanceof HTMLElement)

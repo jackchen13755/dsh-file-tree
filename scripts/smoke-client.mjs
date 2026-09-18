@@ -31,7 +31,17 @@ const check = (label, condition) => {
 }
 
 let loaded
-globalThis.window = { __ModuleLoader__: { load: module => { loaded = module } } }
+globalThis.window = { __ModuleLoader__: { load: module => { loaded = module } }, setTimeout: () => 0, clearTimeout: () => {}, sessionStorage: { getItem: () => null, setItem: () => {} } }
+// The browser half installs a document-level listener at apply time; give the
+// node harness just enough DOM for that to run.
+globalThis.document = {
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  body: { appendChild: () => {} },
+  createElement: () => ({ style: {}, setAttribute: () => {}, appendChild: () => {} }),
+  querySelector: () => null,
+  querySelectorAll: () => [],
+}
 // eslint-disable-next-line no-new-func
 new Function(source)()
 check('bundle calls __ModuleLoader__.load', loaded !== undefined)

@@ -15,6 +15,7 @@ import { createElement, useCallback, useEffect, useMemo, useRef, useState, type 
 import { call, FilePanelError, type ContextValue, type EntryInfo, type Preview } from './api.js'
 import { insertReference } from './reference.js'
 import { languageForPath } from './tab.js'
+import { toast } from './toast.js'
 import {
   findDeclarationLine,
   importedFrom,
@@ -391,7 +392,6 @@ export function FilePanel(props: FilePanelProps): ReactNode {
       clientY?: number
       preventDefault?: () => void
     }): void => {
-      if (!event.ctrlKey && !event.metaKey) return
       const body = previewBody.current
       const previewPath = preview?.path
       if (body === null || previewPath === undefined) return
@@ -402,9 +402,23 @@ export function FilePanel(props: FilePanelProps): ReactNode {
       const elementText = ((event.target as HTMLElement | null)?.textContent ?? '').trim()
       const token = (pointed ?? (elementText.length <= 80 ? elementText : '')).trim()
       if (token === '') return
-      event.preventDefault?.()
       const line = lineIndexOf(body, event.target as Element | null)
       const lineText = line === undefined ? '' : (containerLineText(body, line) ?? '')
+      if (!event.ctrlKey && !event.metaKey) {
+        // A plain click on something jumpable says what to do instead of doing
+        // nothing — silence here was the first bug report about this feature.
+        const jumpable =
+          specifierLike(token) !== undefined ||
+          quotedSpecifierOn(lineText) !== undefined ||
+          /^[A-Za-z_$][\w$]*$/.test(token)
+        if (jumpable) {
+          const hint = '按住 Ctrl（macOS 为 Cmd）点击可跳转到定义或 import 的文件'
+          setNotice({ kind: 'info', text: hint })
+          toast(hint, 'info')
+        }
+        return
+      }
+      event.preventDefault?.()
       const specifier = specifierLike(token) ?? quotedSpecifierOn(lineText)
       if (specifier !== undefined) {
         void call<{ path: string | null; reason?: string }>('resolve', sessionId, { path: previewPath, specifier })
@@ -668,6 +682,9 @@ export function FilePanel(props: FilePanelProps): ReactNode {
           { style: S.previewHead },
           createElement('span', { style: S.iconCell }, entryIcon({ path: preview.path, name: preview.path, dir: false, size: preview.size, mtime: 0 }, false)),
           createElement('span', { style: { ...S.title, flex: 1 }, title: preview.path }, preview.path),
+          preview.kind === 'text'
+            ? createElement('span', { style: { ...S.parent, whiteSpace: 'nowrap' } }, 'Ctrl/Cmd+点击跳转')
+            : null,
           createElement('span', { style: S.size }, formatSize(preview.size)),
           preview.kind === 'text' && preview.truncated === true
             ? createElement('span', { style: { ...S.size, color: TOKEN.danger } }, '已截断')
@@ -690,6 +707,7 @@ export function FilePanel(props: FilePanelProps): ReactNode {
             'div',
             {
               ref: (element: unknown) => { previewBody.current = (element ?? null) as HTMLElement | null },
+              'data-dsh-file-tree-preview': '',
               style: { flex: 1, minHeight: 0, overflow: 'auto' },
               onClick: jumpFromPreview,
               title: 'Ctrl/Cmd + 点击：跳到定义或打开 import 的文件',
