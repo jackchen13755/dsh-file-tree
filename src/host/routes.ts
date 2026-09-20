@@ -13,6 +13,8 @@ import { isLoopback, sessionRoot } from './fence.js'
 import { aliasTable } from './aliases.js'
 import { listDirectory, readPreview, resolveSpecifier, searchFiles } from './files.js'
 import { webServerOf } from './services.js'
+import { CODE_SERVER_PREFIX, ensureInstance, listInstances, viewFor, type CodeServerInstance, type CodeServerOptions } from './code-server.js'
+import { proxyHttp } from './proxy.js'
 
 /** Route prefix owned by this plugin. */
 export const ROUTE_PREFIX = '/dsh-file-tree'
@@ -23,6 +25,8 @@ export interface RouteOptions {
   readonly imageLimitBytes: number
   readonly listLimit: number
   readonly searchLimit: number
+  /** code-server knobs, or undefined when the embedded editor is switched off. */
+  readonly codeServer?: CodeServerOptions
 }
 
 type Failure = { ok: false; error: { code: string; message: string; detail?: string } }
@@ -34,6 +38,7 @@ interface RequestBody {
   readonly query?: unknown
   readonly from?: unknown
   readonly specifier?: unknown
+  readonly start?: unknown
 }
 
 const MAX_BODY_BYTES = 64 * 1024
@@ -72,9 +77,16 @@ function send(response: ServerResponse, status: number, payload: unknown): void 
 
 /**
  * Mount the plugin's HTTP surface.
+ *
+ * Two routes, because they have nothing in common: one JSON API under
+ * `/dsh-file-tree/*` for the tree, previews and search, and one reverse-proxy
+ * route under `/dsh-file-tree/code-server/*` that carries an embedded VS Code
+ * workbench. The web server matches the longest prefix, so the second route
+ * takes precedence for its own subtree and neither can shadow the other.
+ *
  * @param ctx - host context (needs `webServer` and `sessions`).
  * @param options - resolved plugin configuration, echoed back to the browser half.
- * @returns disposer removing the route.
+ * @returns disposer removing both routes.
  */
 export function registerRoutes(ctx: Context, options: RouteOptions): () => void {
   const handler = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
@@ -146,6 +158,11 @@ export function registerRoutes(ctx: Context, options: RouteOptions): () => void 
           send(response, 200, { ok: true, value: { query, hits } })
           return
         }
+        case 'editor': {
+          const editor = await codeServerStatus(workspace, body, options)
+          send(response, 200, { ok: true, value: editor })
+          return
+        }
         default:
           send(response, 404, fail('unknown-op', `unknown operation: ${operation}`))
       }
@@ -157,5 +174,69 @@ export function registerRoutes(ctx: Context, options: RouteOptions): () => void 
     }
   }
 
-  return webServerOf(ctx).register({ kind: 'prefix', path: ROUTE_PREFIX, handler })
+  const disposers: Array<() => void> = [webServerOf(ctx).register({ kind: 'prefix', path: ROUTE_PREFIX, handler })]
+  // The reverse-proxy route is registered separately so its subtree wins the
+  // longest-prefix match, and so a profile with the editor switched off never
+  // sees the route at all.
+  if (options.codeServer !== undefined) {
+    const codeServerOptions = options.codeServer
+    disposers.push(
+      webServerOf(ctx).register({
+        kind: 'prefix',
+        path: CODE_SERVER_PREFIX,
+        handler: (request, response) => {
+          if (!isLoopback(request)) {
+            refuse(response)
+            return
+          }
+          if (!proxyHttp(request, response, new URL(request.url ?? '/', 'http://x').pathname)) {
+            refuse(response)
+          }
+        },
+      }),
+    )
+  }
+  return () => {
+    for (const dispose of disposers) dispose()
+  }
+}
+
+/** Refuse a request that reached the proxy but is not allowed to use it. */
+function refuse(response: ServerResponse): void {
+  if (response.headersSent) {
+    response.end()
+    return
+  }
+  response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+  response.end('dsh-file-tree is loopback-only')
+}
+
+/**
+ * Status of the embedded editor for one workspace, starting it when asked.
+ *
+ * `start: false` is a pure read: the panel polls with it so a workbench that is
+ * still booting does not get a second one launched beside it.
+ *
+ * @param workspace - the session's working directory.
+ * @param body - the request fields (`start`).
+ * @param options - resolved plugin configuration.
+ */
+async function codeServerStatus(
+  workspace: string,
+  body: RequestBody,
+  options: RouteOptions,
+): Promise<
+  | { readonly enabled: false }
+  | { readonly enabled: true; readonly instance?: CodeServerInstance; readonly instances: readonly CodeServerInstance[] }
+> {
+  const configured = options.codeServer
+  if (configured === undefined) return { enabled: false }
+  const wantStart = body.start === undefined ? true : body.start !== false
+  if (wantStart) {
+    const instance = await ensureInstance(workspace, configured)
+    return { enabled: true, instance, instances: listInstances() }
+  }
+  const known = listInstances().find(candidate => candidate.workspace === workspace)
+  const instance = known === undefined ? undefined : (viewFor(known.id) ?? known)
+  return instance === undefined ? { enabled: true, instances: listInstances() } : { enabled: true, instance, instances: listInstances() }
 }

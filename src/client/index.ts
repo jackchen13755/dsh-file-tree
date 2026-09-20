@@ -1,15 +1,28 @@
 /**
  * dsh-file-tree — browser half.
  *
- * Registers the "文件面板" tab type in the native right sidebar plus the keyed
- * slot body that draws it. Nothing here appends columns or writes the shell's
- * grid: the panel rides the sidebar's own tab system (see the sibling
- * dsh-source-control plugin for why that matters on DSH 0.1.6).
+ * Two entries, registered through two different seams on purpose:
+ *
+ * - **文件面板** (the read-only tree, preview and `@`-reference) is a native tab
+ *   type via `ctx.sidebarRightTabs`, with its body in the keyed
+ *   `sidebar.right.pane.tab` slot. It keeps its body but no longer offers a
+ *   guide box: the editor below is its replacement as the way in.
+ * - **编辑器** (the embedded code-server workbench) is registered through
+ *   **dsh-better-sidebar** (`ctx.betterSidebar.registerTab`), which is where the
+ *   tab family lives — its built-ins already contribute 文件变动 / 任务管理 /
+ *   源代码管理 / 终端 to the new-tab list, and registering there puts the editor
+ *   beside them under the same lifecycle, settings toggles and HMR-safe
+ *   disposer instead of in a list of its own.
+ *
+ * Nothing here appends columns or writes the shell's grid: both entries ride
+ * the sidebar's own tab system (see the sibling dsh-source-control plugin for
+ * why that matters on DSH 0.1.6).
  */
 import type { ReactNode } from 'react'
 import { call, type Preview } from './api.js'
 import { lineElements, lineIndexOf, wordAtPoint } from './jump.js'
 import { runJump } from './jump-run.js'
+import { EditorTab } from './editor-tab.js'
 import { FilePanel } from './panel.js'
 import { openFileInTab, type OpenResult, type SidebarRightLike } from './tab.js'
 import { toast } from './toast.js'
@@ -18,6 +31,28 @@ import { toast } from './toast.js'
 const TYPE_ID = 'dsh-file-tree:files'
 /** Tab kind that `openTab` names. */
 const KIND = 'files'
+/** The embedded editor's better-sidebar tab id. */
+const EDITOR_TAB_ID = 'dsh-file-tree:editor'
+
+/**
+ * dsh-better-sidebar's registration face, declared structurally.
+ *
+ * Structural on purpose: the plugin is optional at build time (a profile may run
+ * without it), and reading the service through `ctx.get` keeps that plugin's
+ * types out of this package's dependency graph while still failing safe — with
+ * no service, the native entries below are all that register.
+ */
+interface BetterSidebarService {
+  registerTab(descriptor: {
+    readonly id: string
+    readonly title: string | (() => string)
+    readonly description?: string | (() => string)
+    readonly icon?: unknown
+    readonly order?: number
+    readonly single?: boolean
+    readonly component: (props: { readonly scope?: { readonly sessionId?: string } }) => ReactNode
+  }): () => void
+}
 
 /** The slot service's two calls this plugin makes (declared structurally). */
 interface SlotsService {
@@ -54,6 +89,23 @@ interface TabRegistry {
     readonly title: (address: string) => string
     readonly guide?: readonly GuideEntry[]
   }): () => void
+}
+
+/**
+ * Read dsh-better-sidebar's registration service.
+ *
+ * Read through `ctx.get` rather than the typed property: the plugin is an
+ * optional companion, and reading an uninjected service as a property throws
+ * ("cannot get property without inject") on the compositions that lack it.
+ * @param ctx - client context.
+ */
+function betterSidebarOf(ctx: ClientContext): BetterSidebarService | undefined {
+  try {
+    const service = ctx.get('betterSidebar') as Partial<BetterSidebarService> | undefined
+    return typeof service?.registerTab === 'function' ? (service as BetterSidebarService) : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** `slots` is the only service needed before the first render. */
@@ -196,19 +248,19 @@ export function apply(ctx: ClientContext): void {
   ctx.inject(['sidebarRightTabs'], injected => {
     const tabs = injected.get('sidebarRightTabs') as TabRegistry | undefined
     if (tabs === undefined) return undefined
-    return tabs.register({
-      id: TYPE_ID,
-      kind: KIND,
-      title: () => '文件面板',
-      guide: [
-        {
-          id: 'files',
-          order: 20,
-          title: () => '文件面板',
-          description: () => '工作区文件树 + 预览 + @文件引用',
-        },
-      ],
-    })
+    const disposers = [
+      // No `guide`: the tab type still opens (the file rows and the editor's
+      // "open in panel" paths reach it), it just no longer advertises itself as
+      // a way in. The editor entry below is what the new-tab list offers.
+      tabs.register({
+        id: TYPE_ID,
+        kind: KIND,
+        title: () => '文件面板',
+      }),
+    ]
+    return () => {
+      for (const dispose of disposers) dispose()
+    }
   })
 
   ctx.effect(
@@ -237,6 +289,28 @@ export function apply(ctx: ClientContext): void {
       ),
     'dsh-file-tree: panel body',
   )
+
+  // The editor is a better-sidebar tab, which is where the tab family lives.
+  // Its descriptor takes the component directly: there is no separate slot to
+  // key, and the service's disposer makes this safe across reloads.
+  ctx.effect(() => {
+    const service = betterSidebarOf(ctx)
+    if (service === undefined) {
+      // A profile without dsh-better-sidebar keeps the native file panel and
+      // simply has no editor entry; say so once instead of failing silently.
+      console.warn('dsh-file-tree: ctx.betterSidebar is absent — the 编辑器 tab is not registered')
+      return () => {}
+    }
+    return service.registerTab({
+      id: EDITOR_TAB_ID,
+      title: () => '编辑器',
+      description: () => 'code-server（VS Code 网页版），直接编辑工作区文件',
+      order: 21,
+      // One editor per session: reopening focuses the existing tab.
+      single: true,
+      component: props => EditorTab({ sessionId: String(props.scope?.sessionId ?? lastSessionId ?? '') }),
+    })
+  }, 'dsh-file-tree: editor tab (better-sidebar)')
 
   // Jumps inside the PRODUCT's preview tab: the same decision logic, triggered
   // from a document-level capture listener because that DOM belongs to another

@@ -46,6 +46,25 @@ export interface ContextValue {
   readonly options: PanelOptions
 }
 
+/** One code-server workbench, as the host reports it. */
+export interface EditorInstance {
+  readonly id: string
+  readonly workspace: string
+  readonly state: 'starting' | 'ready' | 'failed'
+  readonly port: number
+  readonly url: string
+  readonly error?: string
+  readonly note?: string
+  readonly version?: string
+}
+
+/** The embedded-editor half of the panel: off, starting, ready, or explained. */
+export interface EditorStatus {
+  readonly enabled: boolean
+  readonly instance?: EditorInstance
+  readonly instances?: readonly EditorInstance[]
+}
+
 /** An operation failure carrying the host's explanation. */
 export class FilePanelError extends Error {
   readonly code: string
@@ -65,14 +84,14 @@ interface Envelope<T> {
 
 /**
  * Call one operation.
- * @param operation - route suffix: `context`, `list`, `read`, `search`.
+ * @param operation - route suffix: `context`, `list`, `read`, `search`, `editor`.
  * @param sessionId - the session the panel is drawn in.
- * @param fields - operation parameters (`path`, `query`, `specifier`).
+ * @param fields - operation parameters (`path`, `query`, `specifier`, `start`).
  */
 export async function call<T>(
   operation: string,
   sessionId: string,
-  fields: { path?: string; query?: string; specifier?: string } = {},
+  fields: { path?: string; query?: string; specifier?: string; start?: boolean } = {},
 ): Promise<T> {
   const response = await fetch(`/dsh-file-tree/${operation}`, {
     method: 'POST',

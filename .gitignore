@@ -1,3 +1,8 @@
 node_modules/
 *.log
 .DS_Store
+
+# Private code-server installs (scripts/install-code-server.sh): ~200MB of
+# machine-specific binaries, fetched on demand and never part of the source.
+# Matches both the installed directory and a local symlink to one.
+.code-server

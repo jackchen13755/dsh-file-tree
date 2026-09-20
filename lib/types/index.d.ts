@@ -1,11 +1,3 @@
-/**
- * dsh-file-tree — host half.
- *
- * A workspace-gated filesystem reader for the file panel: list a directory,
- * preview a file, search by name. The browser half (this package's `./client`
- * export) never names an absolute path; it names the session it is drawn in and
- * the host resolves the workspace from the session store.
- */
 import type { Context } from '@deepseek-ai/cordis';
 import z from 'schemastery';
 /** Plugin identity, as the loader records it. */
@@ -22,10 +14,24 @@ export interface Config {
     listLimit: number;
     /** Maximum hits returned by one search. */
     searchLimit: number;
+    /** Serve the embedded code-server editor (the panel's "编辑器" view). */
+    codeServerEnabled: boolean;
+    /** Explicit code-server launcher, `bin/` directory, or installation root. */
+    codeServerPath: string;
+    /** Extra directories to search for an installation. */
+    codeServerSearchPaths: string[];
+    /** Where workbench user-data and extensions live; one subdirectory per workspace. */
+    codeServerDataDir: string;
+    /** Extra CLI arguments appended to every code-server launch. */
+    codeServerArgs: string[];
+    /** Seconds to wait for a workbench to start listening. */
+    codeServerStartTimeoutSeconds: number;
+    /** Minutes of inactivity after which a workbench is stopped; 0 disables reaping. */
+    codeServerIdleMinutes: number;
 }
 export declare const Config: z<Config>;
 /**
- * Mount the filesystem route.
+ * Mount the filesystem route and the embedded editor.
  * @param ctx - host context.
  * @param config - resolved plugin configuration.
  */
