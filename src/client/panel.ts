@@ -35,7 +35,7 @@ import {
  * page still running an older bundle shows an older stamp, which turns "it does
  * not work" into a one-glance answer instead of a guessing game.
  */
-const BUILD_STAMP = 'b9'
+const BUILD_STAMP = 'b10'
 
 /** Props the tab body receives from this plugin's `inject` factory. */
 export interface FilePanelProps {

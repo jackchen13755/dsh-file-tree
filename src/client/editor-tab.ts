@@ -16,6 +16,15 @@ import { EditorView } from './editor.js'
 /** Props the seat hands the tab body. */
 export interface EditorTabProps {
   readonly sessionId: string
+  /**
+   * Whether this tab is the active one AND the panel is open.
+   *
+   * Load-bearing, not cosmetic: a restored-but-hidden editor tab still mounts,
+   * and starting a workbench there injects a ~756px iframe into a collapsed
+   * column — measured as the layout jump after a refresh (the column's
+   * `scrollWidth` jumps to a full panel width while its width is 0).
+   */
+  readonly visible?: boolean
 }
 
 /**
@@ -23,7 +32,7 @@ export interface EditorTabProps {
  * @param props - the session id this tab is drawn in.
  */
 export function EditorTab(props: EditorTabProps): ReactNode {
-  const { sessionId } = props
+  const { sessionId, visible } = props
   const [status, setStatus] = useState<EditorStatus | null>(null)
   return createElement(
     'div',
@@ -36,6 +45,9 @@ export function EditorTab(props: EditorTabProps): ReactNode {
       sessionId,
       initial: status,
       onStatus: setStatus,
+      // Default to true when the seat says nothing, so a host that does not
+      // report visibility keeps working.
+      active: visible ?? true,
     }),
   )
 }

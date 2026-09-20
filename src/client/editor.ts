@@ -79,6 +79,81 @@ export interface EditorViewProps {
   readonly onStatus: (status: EditorStatus) => void
   /** Omitted when the view *is* the tab: a tab closes from the tab strip, not from a bar button. */
   readonly onClose?: () => void
+  /**
+   * Whether the host reports this view as shown. Advisory only: the view also
+   * measures itself, because a hidden-but-mounted tab is exactly the case that
+   * must not start a workbench, and a host that reports nothing must not disable
+   * the editor.
+   */
+  readonly active?: boolean
+}
+
+/**
+ * Whether the element is genuinely on screen.
+ *
+ * Measuring the element itself is not enough, and that is the whole trap here:
+ * DSH collapses the sidebar to a `width: 0` column with `overflow: hidden`
+ * while keeping the tab mounted, and **children of a clipped zero-width box
+ * still lay out at their natural size** — the editor's root reports
+ * `clientWidth: 756` while sitting in a zero-width column (both measured). So
+ * the check has to walk the ancestor chain and reject any clipped-to-nothing
+ * box along the way.
+ *
+ * @param element - the view's root, or null before it mounts.
+ */
+function isShown(element: HTMLElement | null): boolean {
+  if (element === null) return false
+  if (element.offsetParent === null && getComputedStyle(element).position !== 'fixed') return false
+  if (element.clientWidth <= 0 || element.clientHeight <= 0) return false
+  for (let node = element.parentElement; node !== null && node !== document.body; node = node.parentElement) {
+    const style = getComputedStyle(node)
+    if (style.display === 'contents') continue
+    if (node.clientWidth <= 0 || node.clientHeight <= 0) return false
+  }
+  return true
+}
+
+/**
+ * Track whether a root element is actually on screen.
+ *
+ * Sampled per animation frame, with the state written only when the verdict
+ * changes. A ResizeObserver looks like the right tool and is not: the editor's
+ * root keeps its own `clientWidth` when an ancestor is clipped to zero, so
+ * collapsing the sidebar never resizes the observed element and the observer
+ * stays silent while the view is already off screen (measured). A frame loop
+ * catches both directions — collapse and re-expand — and the memoised write
+ * keeps it to zero re-renders while nothing changes.
+ *
+ * @returns the current verdict (`null` until measured) and the ref to attach.
+ */
+function useShown(): [boolean | null, (element: unknown) => void] {
+  const [shown, setShown] = useState<boolean | null>(null)
+  const element = useRef<HTMLElement | null>(null)
+  const verdict = useRef<boolean | null>(null)
+
+  const attach = useCallback((node: unknown): void => {
+    element.current = (node ?? null) as HTMLElement | null
+    if (element.current === null) {
+      verdict.current = null
+      setShown(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    let frame = 0
+    const poll = (): void => {
+      const next = element.current === null ? null : isShown(element.current)
+      if (next !== verdict.current) {
+        verdict.current = next
+        setShown(next)
+      }
+      frame = requestAnimationFrame(poll)
+    }
+    frame = requestAnimationFrame(poll)
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
+  return [shown, attach]
 }
 
 /**
@@ -86,7 +161,10 @@ export interface EditorViewProps {
  * @param props - session identity, status plumbing and the close action.
  */
 export function EditorView(props: EditorViewProps): ReactNode {
-  const { sessionId, initial, onStatus, onClose } = props
+  const { sessionId, initial, onStatus, onClose, active } = props
+  const [shown, attachRoot] = useShown()
+  /** Both gates must agree; the host's flag alone is not enough (measured). */
+  const live = shown === true && active !== false
   const [status, setStatus] = useState<EditorStatus | null>(initial)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -109,9 +187,11 @@ export function EditorView(props: EditorViewProps): ReactNode {
     [onStatus, sessionId],
   )
 
-  // The view mounts when its tab is shown, so the first request legitimately
-  // starts a process.
+  // Only a view the host is actually showing may start a process. A restored
+  // but hidden tab must stay inert, otherwise it launches a workbench nobody can
+  // see (and reflows the collapsed column while doing it).
   useEffect(() => {
+    if (!live) return undefined
     let cancelled = false
     const tick = async (): Promise<void> => {
       setBusy(true)
@@ -122,9 +202,10 @@ export function EditorView(props: EditorViewProps): ReactNode {
     return () => {
       cancelled = true
     }
-    // Mount-only: later refreshes are explicit or polled below.
+    // Re-runs when the panel goes from hidden to shown, which is what starts a
+    // workbench that was correctly left alone while collapsed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId])
+  }, [sessionId, live])
 
   // While a workbench boots, poll the cheap status read so the view follows the
   // host's own state instead of guessing at a fixed delay.
@@ -170,6 +251,9 @@ export function EditorView(props: EditorViewProps): ReactNode {
         createElement('span', { style: { ...S.hint, padding: 0 } }, '装好 code-server 后点「重试」。'),
       )
     }
+    if (!live) {
+      return createElement('div', { style: S.center }, '编辑器未显示。')
+    }
     if (!ready) {
       return createElement(
         'div',
@@ -193,7 +277,7 @@ export function EditorView(props: EditorViewProps): ReactNode {
 
   return createElement(
     'div',
-    { style: S.root, 'data-dsh-file-tree-editor-root': '' },
+    { ref: attachRoot, style: S.root, 'data-dsh-file-tree-editor-root': '' },
     createElement(
       'div',
       { style: S.bar },
