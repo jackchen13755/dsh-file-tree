@@ -1,10 +1,13 @@
 # dsh-file-tree
 
-**DSH 原生右侧栏里的文件面板** —— 工作区文件树、就地预览（文本 / 图片）、按文件名搜索，以及**一键 `@文件` 引用到输入框**。
+**DSH 右侧栏里的文件面板 + 内置 code-server 编辑器** —— 工作区文件树、就地预览（文本 / 图片）、按文件名搜索、**一键 `@文件` 引用到输入框**，以及**直接编辑文件的 VS Code 网页版**。
 
 ```
-会话 → 右侧栏 → 「+ 新标签页」 → 文件面板
+会话 → 右侧栏 → 「+ 新标签页」 → 编辑器（code-server，整个面板都是编辑器）
+                              → 文件面板（只读浏览 / 预览 / @引用）
 ```
+
+两个入口都注册进 **dsh-better-sidebar** 的标签家族，与「文件变动 / 任务管理 / 源代码管理 / 终端」并列。
 
 ## 为什么自己做一个
 
@@ -14,13 +17,32 @@
 
 | 面 | 用的接口 |
 |---|---|
-| 标签类型 | `ctx.sidebarRightTabs.register({ id, kind, title, guide })` |
-| 标签体 | `ctx.slots.register` 挂 `sidebar.right.pane.tab`（key = 类型 id） |
+| 两个标签入口 | `ctx.betterSidebar.registerTab({ id, title, description, order, single, component })` |
+| 文件地址认领 | `ctx.sidebarRightTabs.register({ id, kind, title })`（无 `guide`，只认领 `dsh-resource://file/…`） |
 | 文件读取 | `ctx.webServer.register({ kind: 'prefix' })` 一条会话级路由 |
+| 编辑器进程 | 每个工作区一个 code-server 子进程（`spawn`，端口由 OS 分配，只绑 `127.0.0.1`） |
+| 编辑器反代 | `ctx.webServer.register({ kind: 'prefix' })` + 拦截原始 http server 的 `upgrade` 事件转发 WebSocket |
 | 会话工作区 | `ctx.sessions.get(id).header.cwd` |
 | `@文件` | 产品自带的 mention 文法（纯文本 `@path` / `@"path with spaces"`） |
 | 打开文件 | `dsh-resource://file/session/<id>/<path>` 地址 → 官方预览标签 |
 | 图标 / 着色 | 产品的 `FileTypeIcon` / `CodeBlock`（`ui-primitives`，惰性加载） |
+
+## 编辑器（code-server）
+
+「编辑器」标签页打开的是**真正的 VS Code 网页版**（code-server 4.138.0）：多文件编辑、集成终端、全局搜索、Git、扩展市场都可用，工作区就是当前会话的 cwd。
+
+**二进制是随插件打包的**：`vendor/code-server/`（约 640MB，`package.json#files` 已包含），装好即用，**不再需要任何下载**。查找顺序是
+`codeServer.binaryPath` → `codeServer.searchPaths` → `vendor/code-server/` → `PATH` 上的 `code-server`，
+所以想用系统自带的（Homebrew 等）也能直接生效。重新灌装用 `npm run install-code-server`。
+
+**为什么是路径前缀反代**：code-server 4.138 **移除了 `--base-path`**，但它的 workbench HTML 与配置全用相对路径（`serverBasePath: "."`），所以把它的前缀剥掉转发即可——实测 workbench 的全部子请求都落在插件前缀内，**零越界请求**。三个必须踩对的点（缺一个就 404/403，均已实测）：
+1. 必须转发 `sec-websocket-key`，否则升级请求退化成普通 GET → **404**；
+2. 上游那一段必须显式写 `Connection: Upgrade` + `Upgrade: websocket`，不能指望 http client 自动补 → 同样 **404**；
+3. 必须**原样保留调用方的 `Host`**：code-server 的 `authenticateOrigin()` 拿 `Origin` 的 host 与请求 `Host` 比对，改写 Host 就永远不相等 → **403**。
+
+**进程生命周期**：按**工作区**（不是按会话）池化——同一仓库的多个会话共用一个 workbench，因此共享一份文件监听与编辑历史；空闲 `codeServerIdleMinutes`（默认 120 分钟）后回收，插件卸载时全部终止。每个工作区的 user-data / extensions 在 `codeServerDataDir` 下分目录存放。
+
+**主题**：不代管。想改配色请在 workbench 内自行设置（设置会持久化在该工作区的 user-data 里）。
 
 ## 功能
 
@@ -72,6 +94,18 @@ dsh plugin --profile web add link:/path/to/dsh-file-tree
 装完硬刷新浏览器（Cmd/Ctrl+Shift+R）。
 
 ## 配置
+
+`cordis.patch.yml` 里 `file-tree` 一行的 `config`（全部可选）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `codeServerEnabled` | `true` | 关掉后不注册「编辑器」入口，也不启动任何 code-server 进程 |
+| `codeServerPath` | `''` | 指定 code-server（启动器 / `bin/` 目录 / 安装根目录均可） |
+| `codeServerSearchPaths` | `[]` | 追加查找目录 |
+| `codeServerDataDir` | `$DSH_HOME/cache/dsh-file-tree/code-server` | 工作区 user-data / extensions 的根 |
+| `codeServerArgs` | `[]` | 追加到每次启动的 CLI 参数 |
+| `codeServerStartTimeoutSeconds` | `45` | 启动等待上限 |
+| `codeServerIdleMinutes` | `120` | 空闲回收；`0` 关闭回收 |
 
 写在 profile 的 `cordis.patch.yml` 行内（都有默认值）：
 

@@ -52,9 +52,10 @@ export declare function instanceIdFor(workspace: string): string;
  * Locate a code-server launcher.
  *
  * Order: the configured path (a launcher, a `bin/` directory, or an installation
- * root), then each configured search directory, then a copy installed inside
- * this package (`<plugin>/.code-server/`, see `scripts/install-code-server.sh`),
- * and finally `PATH`.
+ * root), then each configured search directory, then the copy **vendored into
+ * this package** (`<plugin>/vendor/code-server/`, put there by
+ * `scripts/install-code-server.sh` and shipped in the tarball), and finally a
+ * system-wide `code-server` on `PATH`.
  *
  * @param options - resolved plugin configuration.
  * @returns the launcher's absolute path, or undefined when nothing is installed.

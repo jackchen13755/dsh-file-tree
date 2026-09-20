@@ -27,7 +27,20 @@ const TOKEN = {
 } as const
 
 const S = {
-  root: { display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1, borderTop: `1px solid ${TOKEN.border}` },
+  // Sized for BOTH seat shapes on purpose. better-sidebar wraps a tab in a
+  // column flex host, while DSH's native tab body is a plain block scroll
+  // container: `flex: 1` does nothing in the latter, so the `height`/`maxHeight`
+  // pair is what keeps this tab from collapsing (or from overflowing the panel).
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    height: '100%',
+    maxHeight: '100%',
+    minHeight: 0,
+    overflow: 'hidden',
+    borderTop: `1px solid ${TOKEN.border}`,
+  },
   bar: { display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderBottom: `1px solid ${TOKEN.border}` },
   title: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontWeight: 600 },
   spacer: { flex: 1 },
@@ -41,7 +54,7 @@ const S = {
     cursor: 'pointer',
   },
   iconButton: { border: 'none', background: 'transparent', color: TOKEN.dim, cursor: 'pointer', fontSize: 12, padding: '0 4px' },
-  frame: { border: 0, width: '100%', flex: 1, minHeight: 0, background: '#1e1e1e' },
+  frame: { border: 0, width: '100%', flex: '1 1 auto', height: '100%', minHeight: 0, background: '#1e1e1e' },
   center: { display: 'flex', flexDirection: 'column', gap: 6, padding: 14, color: TOKEN.dim, alignItems: 'flex-start' },
   error: { color: TOKEN.danger },
   hint: { color: TOKEN.dim, fontSize: 11, padding: '0 8px 4px' },

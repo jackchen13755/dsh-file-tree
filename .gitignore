@@ -2,7 +2,8 @@ node_modules/
 *.log
 .DS_Store
 
-# Private code-server installs (scripts/install-code-server.sh): ~200MB of
-# machine-specific binaries, fetched on demand and never part of the source.
-# Matches both the installed directory and a local symlink to one.
+# The vendored code-server (scripts/install-code-server.sh): ~640MB unpacked,
+# shipped inside the packed plugin (package.json#files) so nobody downloads it
+# again, but far too large to track in git.
+vendor/
 .code-server

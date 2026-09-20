@@ -27,7 +27,11 @@ export function EditorTab(props: EditorTabProps): ReactNode {
   const [status, setStatus] = useState<EditorStatus | null>(null)
   return createElement(
     'div',
-    { style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 } },
+    {
+      // Same double-shape sizing as the view it hosts: fill the seat whether it
+      // hands this tab a flex column host or a block scroll container.
+      style: { display: 'flex', flexDirection: 'column', flex: 1, height: '100%', maxHeight: '100%', minHeight: 0, overflow: 'hidden' },
+    },
     createElement(EditorView, {
       sessionId,
       initial: status,

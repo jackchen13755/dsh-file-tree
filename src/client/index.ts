@@ -29,9 +29,16 @@ import { toast } from './toast.js'
 
 /** Registration identity shared by the tab registry and the body slot. */
 const TYPE_ID = 'dsh-file-tree:files'
-/** Tab kind that `openTab` names. */
-const KIND = 'files'
-/** The embedded editor's better-sidebar tab id. */
+/**
+ * The native kind this plugin's panel claims.
+ *
+ * Deliberately NOT `files`: dsh-better-sidebar already registers that kind for
+ * its own file tree (titled "工作区文件"), and a second registration of the same
+ * kind throws — which silently took the rest of the registration pass with it.
+ */
+const KIND = 'dsh-file-tree:panel'
+/** The two better-sidebar tab ids; each doubles as the native tab kind. */
+const FILES_TAB_ID = 'dsh-file-tree:files'
 const EDITOR_TAB_ID = 'dsh-file-tree:editor'
 
 /**
@@ -97,11 +104,11 @@ interface TabRegistry {
  * Read through `ctx.get` rather than the typed property: the plugin is an
  * optional companion, and reading an uninjected service as a property throws
  * ("cannot get property without inject") on the compositions that lack it.
- * @param ctx - client context.
+ * @param holder - a context or an injected-scope reader.
  */
-function betterSidebarOf(ctx: ClientContext): BetterSidebarService | undefined {
+function betterSidebarOf(holder: { get(name: string): unknown }): BetterSidebarService | undefined {
   try {
-    const service = ctx.get('betterSidebar') as Partial<BetterSidebarService> | undefined
+    const service = holder.get('betterSidebar') as Partial<BetterSidebarService> | undefined
     return typeof service?.registerTab === 'function' ? (service as BetterSidebarService) : undefined
   } catch {
     return undefined
@@ -245,13 +252,17 @@ async function resolvePreviewFile(
  * @param ctx - client context.
  */
 export function apply(ctx: ClientContext): void {
-  ctx.inject(['sidebarRightTabs'], injected => {
+  // Wrapped in an effect so a reload disposes the registration before re-adding
+  // it: an undisposed `tabs.register` throws `tab kind "files" is already
+  // registered` on the next mount and takes the rest of that pass with it.
+  ctx.effect(() => ctx.inject(['sidebarRightTabs'], injected => {
     const tabs = injected.get('sidebarRightTabs') as TabRegistry | undefined
     if (tabs === undefined) return undefined
     const disposers = [
-      // No `guide`: the tab type still opens (the file rows and the editor's
-      // "open in panel" paths reach it), it just no longer advertises itself as
-      // a way in. The editor entry below is what the new-tab list offers.
+      // This native type is the panel's *address claim*: file rows and jumps
+      // hand `dsh-resource://file/…` to the sidebar, and the panel claims those
+      // addresses. It carries no `guide`, so the two entries the new-tab list
+      // offers (文件面板 / 编辑器) both come from better-sidebar below instead.
       tabs.register({
         id: TYPE_ID,
         kind: KIND,
@@ -261,7 +272,7 @@ export function apply(ctx: ClientContext): void {
     return () => {
       for (const dispose of disposers) dispose()
     }
-  })
+  }), 'dsh-file-tree: native tab types')
 
   ctx.effect(
     () =>
@@ -293,24 +304,49 @@ export function apply(ctx: ClientContext): void {
   // The editor is a better-sidebar tab, which is where the tab family lives.
   // Its descriptor takes the component directly: there is no separate slot to
   // key, and the service's disposer makes this safe across reloads.
-  ctx.effect(() => {
-    const service = betterSidebarOf(ctx)
-    if (service === undefined) {
-      // A profile without dsh-better-sidebar keeps the native file panel and
-      // simply has no editor entry; say so once instead of failing silently.
-      console.warn('dsh-file-tree: ctx.betterSidebar is absent — the 编辑器 tab is not registered')
-      return () => {}
+  //
+  // Waiting through `ctx.inject` rather than reading `ctx.get` once: the service
+  // belongs to a sibling plugin, and a one-shot read at apply time finds nothing
+  // (measured) — the injected callback runs when the service is actually there.
+  ctx.inject(['betterSidebar'], injected => {
+    const service = betterSidebarOf(injected)
+    if (service === undefined) return undefined
+    const disposers = [
+      service.registerTab({
+        id: FILES_TAB_ID,
+        title: () => '文件面板',
+        description: () => '工作区文件树 + 预览 + @文件引用',
+        order: 20,
+        single: true,
+        component: props => {
+          const sessionId = String(props.scope?.sessionId ?? lastSessionId ?? '')
+          lastSessionId = sessionId
+          return FilePanel({
+            sessionId,
+            // Jumping lands in the product's own preview tab, which is a
+            // separate surface from these tabs.
+            openResource: (path: string, line?: number) => {
+              const result = openFileInTab(ctx.get('sidebarRight') as SidebarRightLike | undefined, sessionId, path, line)
+              if (result.ok) lastOpenedInTab = { sessionId, path }
+              return result
+            },
+          })
+        },
+      }),
+      service.registerTab({
+        id: EDITOR_TAB_ID,
+        title: () => '编辑器',
+        description: () => 'code-server（VS Code 网页版），直接编辑工作区文件',
+        order: 21,
+        // One editor per session: reopening focuses the existing tab.
+        single: true,
+        component: props => EditorTab({ sessionId: String(props.scope?.sessionId ?? lastSessionId ?? '') }),
+      }),
+    ]
+    return () => {
+      for (const dispose of disposers) dispose()
     }
-    return service.registerTab({
-      id: EDITOR_TAB_ID,
-      title: () => '编辑器',
-      description: () => 'code-server（VS Code 网页版），直接编辑工作区文件',
-      order: 21,
-      // One editor per session: reopening focuses the existing tab.
-      single: true,
-      component: props => EditorTab({ sessionId: String(props.scope?.sessionId ?? lastSessionId ?? '') }),
-    })
-  }, 'dsh-file-tree: editor tab (better-sidebar)')
+  })
 
   // Jumps inside the PRODUCT's preview tab: the same decision logic, triggered
   // from a document-level capture listener because that DOM belongs to another

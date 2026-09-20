@@ -3,11 +3,11 @@
 #
 #   bash scripts/install-code-server.sh [version]
 #
-# The panel's embedded editor needs a real code-server. This fetches the official
-# release tarball into <plugin>/.code-server/, which is the location
-# `findBinary()` checks after the configured path and the system locations — so
-# an installation here is found automatically and needs no configuration, and it
-# stays out of the way of a system-wide `code-server`.
+# The panel's embedded editor needs a real code-server, and this plugin VENDORS
+# it: the release tarball is unpacked into <plugin>/vendor/code-server/, which is
+# the location `findBinary()` checks, which `package.json#files` ships, and which
+# therefore never needs downloading again — not on a fresh install, not on a
+# restart, not on another machine.
 #
 # Why not simply stream the release URL: GitHub's release CDN throttles a single
 # connection hard enough that a 200 MB tarball can stall for many minutes on this
@@ -18,7 +18,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-4.138.0}"
-DEST="$ROOT/.code-server"
+DEST="$ROOT/vendor/code-server"
 
 case "$(uname -s)" in
   Darwin) OS="macos" ;;
@@ -37,7 +37,7 @@ echo "=== code-server ${VERSION} (${OS}-${ARCH}) → ${DEST} ==="
 if [ -x "$DEST/bin/code-server" ]; then
   CURRENT="$("$DEST/bin/code-server" --version 2>/dev/null | head -1 || true)"
   echo "already installed: ${CURRENT:-unknown}"
-  echo "delete $DEST to reinstall."
+  echo "delete $DEST to reinstall (the packager ships it; do not re-download casually)."
   exit 0
 fi
 
@@ -49,7 +49,41 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/code-server-install.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 # --- resolve the release asset -------------------------------------------------
-RELEASE_JSON="$(curl -fsSL --max-time 60 "https://api.github.com/repos/coder/code-server/releases/tags/v${VERSION}")"
+# The API is rate limited to 60 requests/hour per IP unauthenticated, which a
+# machine that has been poking at releases will already have spent. A token (or
+# the gh CLI's) lifts that; the direct release URL below is the no-API fallback.
+# A plain string, not an array: macOS ships bash 3.2, where `"${arr[@]}"` on an
+# empty array is an unbound-variable error under `set -u`.
+API_AUTH=""
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  API_AUTH="Authorization: Bearer ${GITHUB_TOKEN}"
+elif [ -n "${GH_TOKEN:-}" ]; then
+  API_AUTH="Authorization: Bearer ${GH_TOKEN}"
+fi
+
+DIRECT_URL="https://github.com/coder/code-server/releases/download/v${VERSION}/${ASSET}"
+if [ -n "$API_AUTH" ]; then
+  RELEASE_JSON="$(curl -fsSL --max-time 60 -H "$API_AUTH" "https://api.github.com/repos/coder/code-server/releases/tags/v${VERSION}" || true)"
+else
+  RELEASE_JSON="$(curl -fsSL --max-time 60 "https://api.github.com/repos/coder/code-server/releases/tags/v${VERSION}" || true)"
+fi
+
+if [ -z "$RELEASE_JSON" ]; then
+  echo "release API unavailable (rate limited?) — falling back to a single-stream download"
+  echo "  tip: export GITHUB_TOKEN=… for the faster parallel path"
+  if ! curl -fL --retry 5 --retry-delay 5 --retry-all-errors --max-time 1800 -C - -o "$TMP/$ASSET" "$DIRECT_URL"; then
+    echo "install-code-server: download failed: $DIRECT_URL" >&2
+    exit 1
+  fi
+  ASSET_SIZE="$(wc -c < "$TMP/$ASSET" | tr -d ' ')"
+  ASSET_ID=""
+fi
+
+if [ -n "${ASSET_ID:-}" ] && [ -z "${ASSET_SIZE:-}" ]; then
+  echo "install-code-server: could not parse release metadata" >&2
+  exit 1
+fi
+
 read -r ASSET_ID ASSET_SIZE <<EOF
 $(printf '%s' "$RELEASE_JSON" | node -e '
   let raw = ""
@@ -65,11 +99,11 @@ $(printf '%s' "$RELEASE_JSON" | node -e '
   })
 ' "$ASSET")
 EOF
-[ -n "${ASSET_ID:-}" ] || { echo "install-code-server: could not resolve $ASSET" >&2; exit 1; }
-echo "asset ${ASSET_ID}, ${ASSET_SIZE} bytes"
 
-# --- parallel range download, with one full-stream fallback -------------------
-node -e '
+# --- download ------------------------------------------------------------------
+if [ -n "${ASSET_ID:-}" ]; then
+  echo "asset ${ASSET_ID}, ${ASSET_SIZE} bytes (parallel ranges)"
+  node -e '
   const [assetId, total, dest, chunks] = process.argv.slice(1)
   const { createWriteStream } = require("node:fs")
   const { open, rm, writeFile } = require("node:fs/promises")
@@ -132,10 +166,24 @@ node -e '
 
   run().then(() => process.exit(0), error => { console.error(error); process.exit(1) })
 ' "$ASSET_ID" "$ASSET_SIZE" "$TMP/$ASSET" 16
+else
+  echo "skipping the release API entirely (no token); using the direct URL"
+  if ! curl -fL --retry 5 --retry-delay 5 --retry-all-errors --max-time 1800 -o "$TMP/$ASSET" "$DIRECT_URL"; then
+    echo "install-code-server: download failed: $DIRECT_URL" >&2
+    exit 1
+  fi
+  ASSET_SIZE="$(wc -c < "$TMP/$ASSET" | tr -d ' ')"
+fi
 
 # --- verify, then extract ------------------------------------------------------
 ACTUAL_SIZE="$(wc -c < "$TMP/$ASSET" | tr -d ' ')"
-[ "$ACTUAL_SIZE" = "$ASSET_SIZE" ] || { echo "install-code-server: size mismatch ($ACTUAL_SIZE != $ASSET_SIZE)" >&2; exit 1; }
+if [ "$ACTUAL_SIZE" != "$ASSET_SIZE" ]; then
+  if [ -n "${ASSET_ID:-}" ]; then
+    echo "install-code-server: size mismatch ($ACTUAL_SIZE != $ASSET_SIZE)" >&2
+    exit 1
+  fi
+  echo "install-code-server: note — the release API gave no size; downloaded $ACTUAL_SIZE bytes"
+fi
 
 mkdir -p "$TMP/extract"
 tar xzf "$TMP/$ASSET" -C "$TMP/extract"
