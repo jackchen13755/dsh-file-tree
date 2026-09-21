@@ -75,12 +75,48 @@ function forwardableHeaders(request: IncomingMessage): Record<string, string | s
 
 /** A plain-text refusal the panel can show verbatim. */
 function refuse(response: ServerResponse, status: number, text: string): void {
+  // A client that already walked away leaves a destroyed response; writing a
+  // status line into it would only raise an error nobody is listening for.
+  if (response.destroyed) return
   if (response.headersSent) {
     response.end()
     return
   }
   response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
   response.end(text)
+}
+
+/**
+ * Pipe an upgraded client socket and the workbench socket in both directions
+ * without letting either leg take the process down.
+ *
+ * `pipe()` alone is not enough here. The workbench-facing socket created by
+ * `http.request` defaults to `allowHalfOpen: false`, so the moment its read
+ * side ends Node swaps its `write` for `writeAfterFIN` and finishes its
+ * writable side: every byte the client→workbench pipe feeds in afterwards
+ * raises `EPIPE` ("This socket has been ended by the other party") and
+ * `destroy(error)`s the socket. A browser closing the workbench tab sends FIN,
+ * code-server finishes its side, and a frame still in flight from the browser
+ * lands in exactly that state. This plugin claims the `upgrade` event before
+ * DSH's own listener runs, and *that* listener is the only thing that attaches
+ * an `error` handler to an upgraded socket, so the event is uncaught and takes
+ * the whole DSH process down — switching session with the editor open was
+ * enough to do it. Both legs therefore get an `error` handler and are torn down
+ * together, which is what a proxy wants anyway.
+ *
+ * @param client - the browser-facing socket.
+ * @param upstream - the workbench-facing socket.
+ */
+export function bridgeSockets(client: Duplex, upstream: Duplex): void {
+  const closeBoth = (): void => {
+    client.destroy()
+    upstream.destroy()
+  }
+  client.on('error', closeBoth)
+  upstream.on('error', closeBoth)
+  client.on('close', closeBoth)
+  upstream.on('close', closeBoth)
+  client.pipe(upstream).pipe(client)
 }
 
 /**
@@ -113,6 +149,18 @@ export function proxyHttp(request: IncomingMessage, response: ServerResponse, pa
       delete headers['content-security-policy']
       delete headers['content-security-policy-report-only']
       response.writeHead(answer.statusCode ?? 502, headers)
+      // A response and its upstream body are a pipe pair with the same hazard as
+      // an upgraded socket (see bridgeSockets): a client that leaves
+      // mid-download leaves a destroyed `response`, and the next body chunk
+      // would then raise an unhandled 'error' on it instead of being dropped.
+      const tearDown = (): void => {
+        response.destroy()
+        answer.destroy()
+      }
+      answer.on('error', tearDown)
+      response.on('error', tearDown)
+      answer.on('close', tearDown)
+      response.on('close', tearDown)
       answer.pipe(response)
     },
   )
@@ -154,14 +202,32 @@ export function proxyUpgrade(request: IncomingMessage, socket: Duplex, head: Buf
       upgrade: 'websocket',
     },
   })
-  upstream.on('upgrade', (answer, upstreamSocket, upstreamHead) => {
+  // The client can send FIN (or reset) before the workbench answers; that must
+  // abort the pending request rather than surface as an uncaught 'error' on a
+  // socket nobody listens to yet (see bridgeSockets). Once the 101 lands, the
+  // upgraded socket joins the same teardown.
+  let upstreamSocket: Duplex | undefined
+  const abort = (): void => {
+    socket.destroy()
+    upstreamSocket?.destroy()
+    upstream.destroy()
+  }
+  socket.on('error', abort)
+  socket.once('close', abort)
+
+  upstream.on('upgrade', (answer, upgradedSocket, upstreamHead) => {
+    upstreamSocket = upgradedSocket
+    upgradedSocket.on('error', abort)
+    // The handshake bytes go out before `pipe()`: piping starts flowing
+    // immediately, and a workbench byte that overtook the 101 line would
+    // corrupt the stream.
     const lines = Object.entries(answer.headers)
       .filter(([, value]) => value !== undefined)
       .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
     socket.write(`HTTP/1.1 101 ${answer.statusMessage ?? 'Switching Protocols'}\r\n${lines.join('\r\n')}\r\n\r\n`)
     if (upstreamHead.length > 0) socket.write(upstreamHead)
-    if (head.length > 0) upstreamSocket.write(head)
-    socket.pipe(upstreamSocket).pipe(socket)
+    if (head.length > 0) upgradedSocket.write(head)
+    bridgeSockets(socket, upgradedSocket)
   })
   // An upgrade that comes back as a normal response was refused upstream; let the
   // client see nothing rather than a half-open socket.

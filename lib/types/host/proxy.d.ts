@@ -32,6 +32,28 @@ import { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Context } from '@deepseek-ai/cordis';
 /**
+ * Pipe an upgraded client socket and the workbench socket in both directions
+ * without letting either leg take the process down.
+ *
+ * `pipe()` alone is not enough here. The workbench-facing socket created by
+ * `http.request` defaults to `allowHalfOpen: false`, so the moment its read
+ * side ends Node swaps its `write` for `writeAfterFIN` and finishes its
+ * writable side: every byte the client→workbench pipe feeds in afterwards
+ * raises `EPIPE` ("This socket has been ended by the other party") and
+ * `destroy(error)`s the socket. A browser closing the workbench tab sends FIN,
+ * code-server finishes its side, and a frame still in flight from the browser
+ * lands in exactly that state. This plugin claims the `upgrade` event before
+ * DSH's own listener runs, and *that* listener is the only thing that attaches
+ * an `error` handler to an upgraded socket, so the event is uncaught and takes
+ * the whole DSH process down — switching session with the editor open was
+ * enough to do it. Both legs therefore get an `error` handler and are torn down
+ * together, which is what a proxy wants anyway.
+ *
+ * @param client - the browser-facing socket.
+ * @param upstream - the workbench-facing socket.
+ */
+export declare function bridgeSockets(client: Duplex, upstream: Duplex): void;
+/**
  * Proxy one HTTP request to the workbench that owns the path.
  * @param request - the incoming request.
  * @param response - the response to own.

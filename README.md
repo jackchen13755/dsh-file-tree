@@ -139,6 +139,7 @@ dsh plugin --profile web add link:/path/to/dsh-file-tree
 bash scripts/build.sh          # host 半 tsc → lib/；client 半 tsc + 自写 CJS 内联 → lib/client.js
 node scripts/smoke-client.mjs  # 浏览器半冒烟：按 ModuleLoader 契约加载并断言注册
 node scripts/test-jump.mjs     # 跳转判定单测（40+ 例：变量/方法/解构/props/接口成员/barrel/别名/路径识别）
+node scripts/test-proxy-socket.mjs  # 反代 socket 守护：workbench socket 已 finish、浏览器那侧还有字节进来时不得崩掉宿主进程
 ```
 
 类型来自真实 DSH 安装（脚本自动探测 `$DSH_HOME/profiles/*`、`$DSH_CHECKOUT`、npx 缓存，可用 `DSH_CHECKOUT=` 指定）。
