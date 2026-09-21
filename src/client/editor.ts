@@ -58,6 +58,15 @@ const S = {
   center: { display: 'flex', flexDirection: 'column', gap: 6, padding: 14, color: TOKEN.dim, alignItems: 'flex-start' },
   error: { color: TOKEN.danger },
   hint: { color: TOKEN.dim, fontSize: 11, padding: '0 8px 4px' },
+  aliveButHidden: {
+    position: 'absolute' as const,
+    left: -99999,
+    top: 0,
+    width: 1,
+    height: 1,
+    visibility: 'hidden' as const,
+    pointerEvents: 'none' as const,
+  },
   code: {
     fontFamily: TOKEN.mono,
     fontSize: 11,
@@ -216,6 +225,12 @@ export function EditorView(props: EditorViewProps): ReactNode {
   }, [instance, load])
 
   const reload = useCallback((): void => {
+    // Refresh in place when there is something to refresh: recreating the iframe
+    // would throw away a live workbench, which is the thing this button avoids.
+    if (frame.current !== null) {
+      frame.current.contentWindow?.location.reload()
+      return
+    }
     setBusy(true)
     void load(true).finally(() => setBusy(false))
   }, [load])
@@ -251,9 +266,6 @@ export function EditorView(props: EditorViewProps): ReactNode {
         createElement('span', { style: { ...S.hint, padding: 0 } }, '装好 code-server 后点「重试」。'),
       )
     }
-    if (!live) {
-      return createElement('div', { style: S.center }, '编辑器未显示。')
-    }
     if (!ready) {
       return createElement(
         'div',
@@ -268,7 +280,9 @@ export function EditorView(props: EditorViewProps): ReactNode {
       },
       src: `${instance.url}?folder=${encodeURIComponent(instance.workspace)}`,
       title: `code-server · ${instance.workspace}`,
-      style: S.frame,
+      // Hidden rather than unmounted: the boot survives a collapse or a tab
+      // switch, so coming back is a repaint instead of a full VS Code reload.
+      style: live ? S.frame : S.aliveButHidden,
       // The workbench needs clipboard and fullscreen; nothing else is granted.
       allow: 'clipboard-read; clipboard-write; fullscreen',
       'data-dsh-file-tree-editor': '',
@@ -277,10 +291,10 @@ export function EditorView(props: EditorViewProps): ReactNode {
 
   return createElement(
     'div',
-    { ref: attachRoot, style: S.root, 'data-dsh-file-tree-editor-root': '' },
+    { ref: attachRoot, style: { ...S.root, position: 'relative' }, 'data-dsh-file-tree-editor-root': '' },
     createElement(
       'div',
-      { style: S.bar },
+      { style: live ? S.bar : { ...S.bar, display: 'none' } },
       createElement('span', { style: { ...S.title, flex: '0 1 auto' } }, '编辑器'),
       createElement(
         'span',
@@ -303,7 +317,7 @@ export function EditorView(props: EditorViewProps): ReactNode {
         : createElement('button', { style: S.iconButton, title: '关闭编辑器', onClick: onClose }, '✕'),
     ),
     body,
-    ready && onClose !== undefined
+    ready && onClose !== undefined && live
       ? createElement('div', { style: S.hint }, '工作台左侧的资源管理器就是文件树；「文件面板」标签页保留工作区的只读浏览与 @引用。')
       : null,
   )
